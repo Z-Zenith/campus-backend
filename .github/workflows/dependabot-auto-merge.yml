@@ -1,0 +1,45 @@
+name: Dependabot auto-merge
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      # Major-version bumps always need a human look — never auto-merged.
+      #
+      # NOTE (#139): patch/minor updates are auto-merged without a human
+      # approval beyond this bot, as long as required CI checks pass. A
+      # malicious patch release that doesn't break the build/tests could
+      # still auto-merge unreviewed. Accepted as a tradeoff for now; revisit
+      # by either requiring a human approval on all dependency bumps or
+      # adding supply-chain scanning (e.g. Socket.dev, OSSF Scorecard).
+      - name: Approve and enable auto-merge for patch/minor updates
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        run: |
+          gh pr review "$PR_URL" --approve -b "Auto-approved: $UPDATE_TYPE update, gated on required CI checks."
+          gh pr merge "$PR_URL" --auto --squash
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on major-version updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" -b "This is a major-version update ($DEP_NAMES). Auto-merge is skipped — please review manually for breaking changes before merging."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEP_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

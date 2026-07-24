@@ -207,6 +207,16 @@ public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, I
         {
             return NotFound();
         }
+        // #126: view_browsing_history is a global-scoped permission enforced platform-wide
+        // today; without this a holder at one college could generate/persist a browsing
+        // summary for a student at any other college. Mirror UsersController.GetProfile's
+        // CollegeId check and 404-collapse convention (an out-of-college target is treated
+        // as not found rather than Forbidden) — the check lands before any summary is
+        // generated or written.
+        if (student.CollegeId != caller.CollegeId)
+        {
+            return NotFound();
+        }
 
         var visits = await db.BrowsingHistories
             .Where(v => v.StudentId == id)

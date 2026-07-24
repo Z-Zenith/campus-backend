@@ -301,4 +301,83 @@ public class MarksControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
     }
+
+    // #126 (fix: enforce college scope on external-marks approval). The helpers below drive
+    // the Admin (global, non-department-scoped) approve_external_marks path: the caller holds
+    // the permission via a direct grant and has no hod/department binding, so
+    // GetDepartmentScopeAsync returns null and the college clamp is what applies.
+    private static PermissionGrant GrantApproveExternalMarks(Guid userId) => new()
+    {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        PermissionCode = "approve_external_marks",
+        Granted = true,
+        GrantedBy = Guid.NewGuid(),
+        CreatedAt = DateTime.UtcNow,
+    };
+
+    private static User SeedApproverAdmin(AppDbContext db, Guid collegeId)
+    {
+        var admin = new User { Id = Guid.NewGuid(), CollegeId = collegeId, Identifier = $"admin-{Guid.NewGuid():N}", PasswordHash = "hash", FullName = "Admin", IsActive = true, AccountType = AccountType.AdminTier };
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(GrantApproveExternalMarks(admin.Id));
+        return admin;
+    }
+
+    // Builds a pending external mark for a student in the given college. SubmittedBy points at
+    // an existing user so the pending-queue projection's SubmittedByNavigation resolves.
+    private static ExternalMark SeedPendingExternalMark(AppDbContext db, Guid studentCollegeId, Guid submittedBy)
+    {
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = studentCollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro to CS" };
+        var student = new User { Id = Guid.NewGuid(), CollegeId = studentCollegeId, Identifier = $"student-{Guid.NewGuid():N}", PasswordHash = "hash", FullName = "Student", IsActive = true, AccountType = AccountType.Student };
+        var mark = new ExternalMark { Id = Guid.NewGuid(), StudentId = student.Id, SubjectId = subject.Id, Grade = "A", SubmittedBy = submittedBy, SubmittedAt = DateTime.UtcNow, Approved = false, Published = false };
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Users.Add(student);
+        db.ExternalMarks.Add(mark);
+        return mark;
+    }
+
+    [Fact]
+    public async Task PendingExternal_AdminPath_ExcludesPendingMarksFromOtherColleges()
+    {
+        using var db = NewDb();
+        var callerCollege = Guid.NewGuid();
+        var admin = SeedApproverAdmin(db, callerCollege);
+        var mine = SeedPendingExternalMark(db, callerCollege, admin.Id);
+        SeedPendingExternalMark(db, Guid.NewGuid(), admin.Id);
+        await db.SaveChangesAsync();
+
+        var controller = BuildController(db, admin.Id);
+        var result = await controller.PendingExternal();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var pending = Assert.IsType<List<PendingExternalMarkDto>>(ok.Value);
+        var entry = Assert.Single(pending);
+        Assert.Equal(mine.Id, entry.Id);
+    }
+
+    [Fact]
+    public async Task ApproveExternal_AdminPath_NotFound_ForStudentInAnotherCollege_AndDoesNotFlipApproved()
+    {
+        using var db = NewDb();
+        var callerCollege = Guid.NewGuid();
+        var admin = SeedApproverAdmin(db, callerCollege);
+        var crossCollegeMark = SeedPendingExternalMark(db, Guid.NewGuid(), admin.Id);
+        await db.SaveChangesAsync();
+
+        var controller = BuildController(db, admin.Id);
+        var result = await controller.ApproveExternal(crossCollegeMark.Id);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+        var reloaded = await db.ExternalMarks.FindAsync(crossCollegeMark.Id);
+        Assert.False(reloaded!.Approved);
+        Assert.False(reloaded.Published);
+    }
+
+    // Note: a same-college approve happy-path test isn't included here because the atomic
+    // flip uses ExecuteUpdateAsync, which the EF Core InMemory provider doesn't support (the
+    // pre-existing approve tests short-circuit before it for the same reason). The
+    // cross-college guard above runs before ExecuteUpdateAsync, so it exercises the fix fully.
 }

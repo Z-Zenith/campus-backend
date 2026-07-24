@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace BackendApi.Services;
 
@@ -34,6 +35,24 @@ public interface IAiServicesClient
 
 public class AiServicesClient(HttpClient http) : IAiServicesClient
 {
+    // The ai-services container (Python/FastAPI) serializes and expects snake_case field
+    // names verbatim from its Pydantic schemas (similarity_score, student_id, recorded_at,
+    // max_score, matched_criteria, submission_a_id, event_type, confidence_score, …) with
+    // no alias generator. The default System.Text.Json web options (camelCase out,
+    // case-insensitive in) cannot bridge the underscore, so every call either 422'd
+    // (/suspicious-behaviour, /browsing-summary) or deserialized to 0/null while silently
+    // dropping request fields like max_score (/similarity, /autograde). SnakeCaseLower is
+    // the single casing source of truth for this client; it must be passed EXPLICITLY to
+    // every PostAsJsonAsync/ReadFromJsonAsync — the parameterless overloads ignore it. C#
+    // records stay PascalCase so the same public result types can still be returned to
+    // frontends in camelCase by MVC; the policy is scoped to this client only.
+    public static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private sealed record SimilarityRequestBody(IReadOnlyList<SubmissionItemBody> Submissions, double Threshold);
     private sealed record SubmissionItemBody(string Id, string Content);
     private sealed record SimilarityResponseBody(List<SimilarityMatchResult> Matches);
@@ -43,9 +62,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     {
         var body = new SimilarityRequestBody(
             submissions.Select(s => new SubmissionItemBody(s.Id, s.Content)).ToList(), threshold);
-        var response = await http.PostAsJsonAsync("/api/v1/similarity", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/similarity", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<SimilarityResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<SimilarityResponseBody>(JsonOptions, ct);
         return result?.Matches ?? [];
     }
 
@@ -57,9 +76,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     {
         var body = new AutogradeRequestBody(
             content, rubric.Select(r => new RubricCriterionBody(r.Name, r.Keywords, r.Weight)).ToList(), maxScore);
-        var response = await http.PostAsJsonAsync("/api/v1/autograde", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/autograde", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<AutogradeSuggestionResult>(cancellationToken: ct)
+        return await response.Content.ReadFromJsonAsync<AutogradeSuggestionResult>(JsonOptions, ct)
             ?? throw new InvalidOperationException("AI Services returned an empty autograde response.");
     }
 
@@ -70,9 +89,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
         IReadOnlyList<TelemetryEventInput> events, double minConfidence, CancellationToken ct = default)
     {
         var body = new SuspiciousBehaviourRequestBody(events, minConfidence);
-        var response = await http.PostAsJsonAsync("/api/v1/suspicious-behaviour", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/suspicious-behaviour", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponseBody>(JsonOptions, ct);
         return result?.Flags ?? [];
     }
 
@@ -82,9 +101,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     public async Task<string> SummarizeBrowsingAsync(IReadOnlyList<BrowsingVisitInput> visits, CancellationToken ct = default)
     {
         var body = new BrowsingSummaryRequestBody(visits);
-        var response = await http.PostAsJsonAsync("/api/v1/browsing-summary", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/browsing-summary", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<BrowsingSummaryResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<BrowsingSummaryResponseBody>(JsonOptions, ct);
         return result?.Summary ?? "";
     }
 }

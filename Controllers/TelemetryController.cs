@@ -1,7 +1,6 @@
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
@@ -88,27 +87,31 @@ public class TelemetryController(AppDbContext db, IHttpClientFactory httpClientF
         try
         {
             var client = httpClientFactory.CreateClient("AiServices");
+            // Wire shape unchanged (still just `events`, no `min_confidence`), but casing now
+            // comes from the one shared source of truth — AiServicesClient.JsonOptions
+            // (SnakeCaseLower) — instead of hand-written snake_case literals + a separate
+            // local options bag. PascalCase properties here map to snake_case on the wire.
             var payload = new
             {
-                events = events.Select(e => new
+                Events = events.Select(e => new
                 {
-                    student_id = studentId.ToString(),
-                    class_session_id = e.ClassSessionId?.ToString(),
-                    assignment_id = e.Event.AssignmentId?.ToString(),
-                    event_type = e.Event.EventType,
-                    metadata = e.Event.Metadata ?? [],
-                    recorded_at = e.Event.RecordedAt,
+                    StudentId = studentId.ToString(),
+                    ClassSessionId = e.ClassSessionId?.ToString(),
+                    AssignmentId = e.Event.AssignmentId?.ToString(),
+                    EventType = e.Event.EventType,
+                    Metadata = e.Event.Metadata ?? [],
+                    RecordedAt = e.Event.RecordedAt,
                 }),
             };
 
-            var response = await client.PostAsJsonAsync("/api/v1/suspicious-behaviour", payload);
+            var response = await client.PostAsJsonAsync("/api/v1/suspicious-behaviour", payload, AiServicesClient.JsonOptions);
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("AI Services suspicious-behaviour check returned {Status}", response.StatusCode);
                 return 0;
             }
 
-            var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponse>(SnakeCaseJsonOptions);
+            var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponse>(AiServicesClient.JsonOptions);
             if (result?.Flags is not { Count: > 0 } flags)
             {
                 return 0;
@@ -136,19 +139,17 @@ public class TelemetryController(AppDbContext db, IHttpClientFactory httpClientF
         }
     }
 
-    // AI Services (Python/FastAPI) emits snake_case JSON field names verbatim from its
-    // Pydantic schemas (no camelCase alias generator) — map explicitly rather than rely
-    // on a naming policy that only handles casing, not underscore removal.
-    private static readonly JsonSerializerOptions SnakeCaseJsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    private record SuspiciousBehaviourResponse([property: JsonPropertyName("flags")] List<SuspiciousFlagResponse> Flags);
+    // Response casing is handled by AiServicesClient.JsonOptions (SnakeCaseLower +
+    // case-insensitive), the single source of truth for the ai-services JSON contract, so
+    // these records stay plain PascalCase — no per-property [JsonPropertyName] drift.
+    private record SuspiciousBehaviourResponse(List<SuspiciousFlagResponse> Flags);
 
     private record SuspiciousFlagResponse(
-        [property: JsonPropertyName("student_id")] string StudentId,
-        [property: JsonPropertyName("class_session_id")] string? ClassSessionId,
-        [property: JsonPropertyName("assignment_id")] string? AssignmentId,
-        [property: JsonPropertyName("confidence_score")] double ConfidenceScore,
-        [property: JsonPropertyName("reasons")] List<string> Reasons);
+        string StudentId,
+        string? ClassSessionId,
+        string? AssignmentId,
+        double ConfidenceScore,
+        List<string> Reasons);
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 }

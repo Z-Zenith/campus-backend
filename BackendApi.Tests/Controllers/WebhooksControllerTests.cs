@@ -39,6 +39,18 @@ public class WebhooksControllerTests
         IsAutosubmitted = false,
     };
 
+    // Builds a webhook body carrying `developerPayload` — the field Copyleaks echoes back
+    // from the value we set on the scan at submit time, and the only thing authenticating
+    // the callback (Copyleaks does not sign webhook payloads). Pass developerPayload: null
+    // to omit the field entirely (an unauthenticated caller).
+    private static JsonElement Body(string? developerPayload = "test-secret")
+    {
+        var json = developerPayload is null
+            ? "{}"
+            : $$"""{"developerPayload":{{JsonSerializer.Serialize(developerPayload)}}}""";
+        return JsonDocument.Parse(json).RootElement;
+    }
+
     // AIS-02: an arbitrary caller without the configured secret must not be able to
     // inject a fake plagiarism result into a submission's report.
     [Fact]
@@ -51,7 +63,25 @@ public class WebhooksControllerTests
 
         var controller = NewController(db);
         var result = await controller.CopyleaksResult(
-            submission.Id.ToString("N"), "completed", "wrong-secret", JsonDocument.Parse("{}").RootElement);
+            submission.Id.ToString("N"), "completed", Body("wrong-secret"));
+
+        Assert.IsType<UnauthorizedResult>(result);
+        Assert.Empty(await db.PlagiarismReports.ToListAsync());
+    }
+
+    // A forged callback that omits developerPayload entirely must also be rejected — the
+    // missing-field path must never fall through to accepting the request.
+    [Fact]
+    public async Task Ais02_CopyleaksResult_RejectsRequestsWithNoDeveloperPayload()
+    {
+        await using var db = NewDb();
+        var submission = NewSubmission();
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+
+        var controller = NewController(db);
+        var result = await controller.CopyleaksResult(
+            submission.Id.ToString("N"), "completed", Body(developerPayload: null));
 
         Assert.IsType<UnauthorizedResult>(result);
         Assert.Empty(await db.PlagiarismReports.ToListAsync());
@@ -67,7 +97,7 @@ public class WebhooksControllerTests
 
         var controller = NewController(db);
         var result = await controller.CopyleaksResult(
-            submission.Id.ToString("N"), "error", "test-secret", JsonDocument.Parse("{}").RootElement);
+            submission.Id.ToString("N"), "error", Body());
 
         Assert.IsType<OkResult>(result);
         Assert.Empty(await db.PlagiarismReports.ToListAsync());
@@ -80,7 +110,7 @@ public class WebhooksControllerTests
         var controller = NewController(db);
 
         var result = await controller.CopyleaksResult(
-            Guid.NewGuid().ToString("N"), "completed", "test-secret", JsonDocument.Parse("{}").RootElement);
+            Guid.NewGuid().ToString("N"), "completed", Body());
 
         Assert.IsType<NotFoundResult>(result);
     }
@@ -100,7 +130,7 @@ public class WebhooksControllerTests
         var controller = NewController(db, fakeCopyleaks);
 
         var result = await controller.CopyleaksResult(
-            submission.Id.ToString("N"), "completed", "test-secret", JsonDocument.Parse("{}").RootElement);
+            submission.Id.ToString("N"), "completed", Body());
 
         Assert.IsType<OkResult>(result);
         var report = Assert.Single(await db.PlagiarismReports.ToListAsync());
@@ -128,7 +158,7 @@ public class WebhooksControllerTests
         var fakeCopyleaks = new FakeCopyleaksClient { WebhookResult = new PlagiarismScanResult(0.05, []) };
         var controller = NewController(db, fakeCopyleaks);
 
-        await controller.CopyleaksResult(submission.Id.ToString("N"), "completed", "test-secret", JsonDocument.Parse("{}").RootElement);
+        await controller.CopyleaksResult(submission.Id.ToString("N"), "completed", Body());
 
         var report = Assert.Single(await db.PlagiarismReports.ToListAsync());
         Assert.Equal(0.05m, report.SimilarityScore);

@@ -15,7 +15,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks, IConfiguration configuration) : ControllerBase
+public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks) : ControllerBase
 {
     // TWA-07. Gated by "caller teaches this subject" rather than a permission code — no
     // "create_assignment" code exists in the seeded catalog, and adding one is an
@@ -271,9 +271,11 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         var scanId = id.ToString("N");
         try
         {
-            var secret = configuration["Copyleaks:WebhookSecret"] ?? "";
+            // No secret in the URL: it would leak into access/proxy logs. The shared secret
+            // is carried in the scan's properties.developerPayload instead (set by
+            // CopyleaksClient) and validated from the webhook body by WebhooksController.
             var webhookUrlTemplate =
-                $"{Request.Scheme}://{Request.Host}/api/v1/webhooks/copyleaks/{scanId}/{{status}}?secret={Uri.EscapeDataString(secret)}";
+                $"{Request.Scheme}://{Request.Host}/api/v1/webhooks/copyleaks/{scanId}/{{status}}";
             await copyleaks.SubmitScanAsync(scanId, submission.ContentUrl, webhookUrlTemplate);
         }
         catch (ExternalServiceNotConfiguredException)

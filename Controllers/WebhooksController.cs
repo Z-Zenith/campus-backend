@@ -11,21 +11,43 @@ using Microsoft.EntityFrameworkCore;
 namespace BackendApi.Controllers;
 
 // AIS-02: receives Copyleaks' scan-completion callback (see CopyleaksClient.SubmitScanAsync,
-// which registers a URL of this shape as the scan's webhook). Unauthenticated by necessity
-// — Copyleaks itself calls this, not a signed-in user — so the `secret` query parameter
-// (must match Copyleaks:WebhookSecret) is the only thing stopping an arbitrary caller from
-// injecting fake plagiarism results into a submission's report.
+// which registers the URL of this shape as the scan's webhook). Unauthenticated by necessity
+// — Copyleaks itself calls this, not a signed-in user — so a shared secret is the only thing
+// stopping an arbitrary caller from injecting fake plagiarism results into a submission's
+// report.
+//
+// Copyleaks does NOT sign webhook payloads (no HMAC / signature header). Per Copyleaks'
+// webhook-security docs the two supported ways to authenticate a callback are (a) mutual TLS
+// with client-certificate thumbprint pinning and (b) the `developerPayload` field: a secret
+// string set on the scan at submit time that Copyleaks echoes back in the webhook body, which
+// you compare against your expected value. We use (b): the secret travels in the request BODY
+// (Copyleaks:WebhookSecret -> properties.developerPayload in CopyleaksClient), not the URL, so
+// it no longer leaks into access logs / proxy logs the way the previous `?secret=` query
+// parameter did. mTLS pinning (a) is the stronger documented option but is infra-level (a
+// dynamic thumbprint list requiring a daily refresh), out of scope for this code change.
+// Docs: https://docs.copyleaks.com/concepts/security/webhooks
 [ApiController]
 [Route("api/v1/webhooks")]
 [AllowAnonymous]
 public class WebhooksController(AppDbContext db, IConfiguration configuration, ICopyleaksClient copyleaks) : ControllerBase
 {
     [HttpPost("copyleaks/{scanId}/{status}")]
-    public async Task<IActionResult> CopyleaksResult(string scanId, string status, [FromQuery] string? secret, [FromBody] JsonElement payload)
+    public async Task<IActionResult> CopyleaksResult(string scanId, string status, [FromBody] JsonElement payload)
     {
         var expectedSecret = configuration["Copyleaks:WebhookSecret"];
-        if (string.IsNullOrEmpty(expectedSecret) || string.IsNullOrEmpty(secret)
-            || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(expectedSecret)))
+
+        // Copyleaks echoes the secret we set at submit time back as the top-level
+        // `developerPayload` field on every webhook type (completed/error/creditsUsage).
+        string? developerPayload = null;
+        if (payload.ValueKind == JsonValueKind.Object
+            && payload.TryGetProperty("developerPayload", out var dp)
+            && dp.ValueKind == JsonValueKind.String)
+        {
+            developerPayload = dp.GetString();
+        }
+
+        if (string.IsNullOrEmpty(expectedSecret) || string.IsNullOrEmpty(developerPayload)
+            || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(developerPayload), Encoding.UTF8.GetBytes(expectedSecret)))
         {
             return Unauthorized();
         }

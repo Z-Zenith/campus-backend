@@ -53,13 +53,25 @@ public class CopyleaksClient(HttpClient http, IConfiguration configuration) : IC
         var login = await loginResponse.Content.ReadFromJsonAsync<LoginResponseBody>(cancellationToken: ct)
             ?? throw new InvalidOperationException("Copyleaks login returned an empty response.");
 
+        // developerPayload is Copyleaks' documented webhook-authentication mechanism: this
+        // secret is echoed back verbatim in the webhook body's top-level `developerPayload`
+        // field, and WebhooksController compares it (constant-time) to Copyleaks:WebhookSecret.
+        // Carrying the secret here (in the submit body) rather than in the webhook URL keeps it
+        // out of access/proxy logs. Copyleaks caps developerPayload at 512 chars.
+        // Docs: https://docs.copyleaks.com/concepts/security/webhooks
+        var webhookSecret = configuration["Copyleaks:WebhookSecret"] ?? "";
+
         var submitRequest = new HttpRequestMessage(HttpMethod.Put, $"/v3/scans/submit/text/{scanId}")
         {
             Content = JsonContent.Create(new
             {
                 @base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(content)),
                 filename = $"{scanId}.txt",
-                properties = new { webhooks = new { status = webhookUrlTemplate } },
+                properties = new
+                {
+                    webhooks = new { status = webhookUrlTemplate },
+                    developerPayload = webhookSecret,
+                },
             }),
         };
         submitRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);

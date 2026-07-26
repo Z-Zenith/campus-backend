@@ -2913,6 +2913,50 @@
         }
       }
     },
+    "/api/v1/syllabus/extract": {
+      "post": {
+        "tags": [
+          "Syllabus"
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "$ref": "#/components/schemas/IFormFile"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teacher-feedback/my-teachers": {
       "get": {
         "tags": [
@@ -3672,13 +3716,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "secret",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -3712,7 +3749,13 @@
   "components": {
     "schemas": {
       "AccountType": {
-        "type": "integer"
+        "enum": [
+          "Student",
+          "Teacher",
+          "AdminTier",
+          "Parent"
+        ],
+        "type": "string"
       },
       "ApproveExternalMarkResponse": {
         "required": [
@@ -3823,7 +3866,13 @@
         }
       },
       "AssignmentType": {
-        "type": "integer"
+        "enum": [
+          "Code",
+          "Quiz",
+          "Essay",
+          "FileUpload"
+        ],
+        "type": "string"
       },
       "AttendanceAlertDto": {
         "required": [
@@ -4892,7 +4941,17 @@
         }
       },
       "GroupType": {
-        "type": "integer"
+        "enum": [
+          "Class",
+          "SubjectSection",
+          "Club",
+          "TeacherOnly"
+        ],
+        "type": "string"
+      },
+      "IFormFile": {
+        "type": "string",
+        "format": "binary"
       },
       "InternalMarkDto": {
         "required": [
@@ -5938,7 +5997,11 @@
         }
       },
       "ScopeKind": {
-        "type": "integer"
+        "enum": [
+          "Global",
+          "Department"
+        ],
+        "type": "string"
       },
       "SectionFeedbackDto": {
         "required": [
@@ -6399,6 +6462,51 @@
               "string"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "SyllabusExtractionResponseDto": {
+        "required": [
+          "courseCode",
+          "courseName",
+          "instructorName",
+          "credits",
+          "confidenceNotes"
+        ],
+        "type": "object",
+        "properties": {
+          "courseCode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "courseName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instructorName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "credits": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "confidenceNotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -6876,6 +6984,9 @@
     },
     {
       "name": "Subjects"
+    },
+    {
+      "name": "Syllabus"
     },
     {
       "name": "TeacherFeedback"

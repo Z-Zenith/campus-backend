@@ -25,6 +25,19 @@ jobs:
       - name: Build
         run: dotnet build --no-restore -c Release
 
+      # Regenerate the committed OpenAPI snapshot from the current code and fail if it
+      # drifted (Contracts/README.md documents this exact command). The generator builds
+      # the app host to introspect routes, which trips Program.cs's fail-fast dev-placeholder
+      # guard (#137) unless ASPNETCORE_ENVIRONMENT=Development — the tracked
+      # appsettings.Development.json supplies the dev Jwt:Key so this runs headless.
+      - name: Regenerate OpenAPI snapshot & check for drift
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+        run: |
+          dotnet build -p:OpenApiGenerateDocumentsOnBuild=true
+          git diff --exit-code -- Contracts/openapi.snapshot.json \
+            || { echo "::error::Contracts/openapi.snapshot.json is stale. Run 'ASPNETCORE_ENVIRONMENT=Development dotnet build -p:OpenApiGenerateDocumentsOnBuild=true' and commit the result."; exit 1; }
+
       - name: Test
         run: dotnet test BackendApi.Tests -c Release
 

@@ -240,6 +240,16 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
         {
             query = query.Where(m => m.Subject.DepartmentId == departmentScope);
         }
+        else
+        {
+            // #126/#129: a global (non-department-scoped) approve_external_marks holder — the
+            // Admin path — must only see pending marks for students in their own college, not
+            // every college's queue. Mirrors CreateExternal's college clamp. Filtered on the
+            // student's college so this stays consistent with ApproveExternal's own check
+            // below (a mark listed here can actually be approved there).
+            var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+            query = query.Where(m => m.Student.CollegeId == callerCollegeId);
+        }
 
         var pending = await query
             .OrderBy(m => m.SubmittedAt)
@@ -288,6 +298,24 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
             if (subjectDepartmentId != departmentScope)
             {
                 return Forbid();
+            }
+        }
+        else
+        {
+            // #126/#129: a global (non-department-scoped) approve_external_marks holder — the
+            // Admin path — must not approve/publish a mark for a student outside their own
+            // college. Verified before the ExecuteUpdateAsync so a cross-college row is never
+            // flipped to Approved/Published. Uses the 404-collapse convention (treated as not
+            // found rather than Forbidden), matching the department path's own scope guard's
+            // intent while not leaking that a row for another college exists.
+            var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+            var studentCollegeId = await db.Users
+                .Where(u => u.Id == mark.StudentId)
+                .Select(u => (Guid?)u.CollegeId)
+                .FirstOrDefaultAsync();
+            if (studentCollegeId != callerCollegeId)
+            {
+                return NotFound();
             }
         }
 

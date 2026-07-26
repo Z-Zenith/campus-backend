@@ -3672,13 +3672,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "secret",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "requestBody": {

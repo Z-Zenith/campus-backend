@@ -96,6 +96,56 @@ public class CalendarControllerTests
         Assert.Single(await db.Events.ToListAsync());
     }
 
+    [Fact]
+    public async Task MyEvents_ReturnsOnlyEventsInCallersOwnCollege_UnfilteredByRestriction()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = teacher.CollegeId,
+            Title = "Freshman-only orientation",
+            StartTime = new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc),
+            EndTime = new DateTime(2026, 8, 1, 11, 0, 0, DateTimeKind.Utc),
+            CreatedBy = teacher.Id,
+            RestrictedYears = [1], // a student-eligibility filter — must NOT hide this from staff
+        });
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = Guid.NewGuid(), // a different college entirely
+            Title = "Other college's event",
+            StartTime = new DateTime(2026, 8, 2, 10, 0, 0, DateTimeKind.Utc),
+            EndTime = new DateTime(2026, 8, 2, 11, 0, 0, DateTimeKind.Utc),
+            CreatedBy = Guid.NewGuid(),
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.MyEvents();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var events = Assert.IsType<List<EventDto>>(ok.Value);
+        var found = Assert.Single(events);
+        Assert.Equal("Freshman-only orientation", found.Title);
+    }
+
+    [Fact]
+    public async Task MyEvents_ForbidsStudentCallers()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.MyEvents();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
     // #159: an undated todo used to be mapped to DateTime.MinValue (0001-01-01), rendering
     // as a ~2000-years-overdue calendar item. It should be omitted from the dated calendar
     // instead.

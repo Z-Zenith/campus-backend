@@ -110,6 +110,31 @@ builder.Services.AddHttpClient<ICopyleaksClient, CopyleaksClient>(client =>
     client.BaseAddress = new Uri(baseUrl);
 });
 
+// AIS-05: Pangram — external, credentialed (Pangram:ApiKey), same fail-closed pattern as
+// Copyleaks above (no safe local-dev default base URL either).
+builder.Services.AddHttpClient<IPangramClient, PangramClient>(client =>
+{
+    var baseUrl = builder.Configuration["Pangram:BaseUrl"] ?? "https://api.pangram.com";
+    client.BaseAddress = new Uri(baseUrl);
+});
+
+// SEK-04: Openverse is public/keyless, unlike Copyleaks/Pangram — no ExternalServiceNotConfigured
+// fail-closed path needed here.
+builder.Services.AddHttpClient<IImageSearchClient, OpenverseImageSearchClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["ImageSearch:BaseUrl"] ?? "https://api.openverse.org");
+});
+
+// SEK-04: same container-local-volume convention as DataProtection:KeysPath above — a
+// Docker-mounted path in production, a local folder next to build output otherwise.
+var imageStorageDir = builder.Configuration["ImageStorage:Directory"]
+    ?? (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true"
+        ? "/data/image-search"
+        : Path.Combine(AppContext.BaseDirectory, "image-search-cache"));
+const string ImageStorageRequestPath = "/media/image-search";
+builder.Services.AddSingleton(new ImageStorageOptions(imageStorageDir, ImageStorageRequestPath));
+builder.Services.AddHttpClient<IImageStorageService, LocalImageStorageService>();
+
 var jwtSection = builder.Configuration.GetSection("Jwt");
 var jwtKey = jwtSection["Key"];
 if (string.IsNullOrWhiteSpace(jwtKey))
@@ -216,6 +241,16 @@ app.Use(async (context, next) =>
 });
 
 app.UseHttpsRedirection();
+
+// SEK-04: serves re-hosted image-search results (LocalImageStorageService). Unauthenticated,
+// same trust level as linking to Openverse's own public CDN directly — these are already-public
+// images, not private material downloads (which stay behind MaterialsController's auth check).
+Directory.CreateDirectory(imageStorageDir);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(imageStorageDir),
+    RequestPath = ImageStorageRequestPath,
+});
 
 app.UseRateLimiter();
 

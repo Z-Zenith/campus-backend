@@ -15,7 +15,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks) : ControllerBase
+public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks, IPangramClient pangram) : ControllerBase
 {
     // TWA-07. Gated by "caller teaches this subject" rather than a permission code — no
     // "create_assignment" code exists in the seeded catalog, and adding one is an
@@ -321,8 +321,59 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         return Ok(ToPlagiarismDto(report));
     }
 
-    [HttpGet("submissions/{id}/ai-detection")]
-    public IActionResult AiDetection(Guid id) => StatusCode(501, new { feature = "AIS-05", status = "not_implemented" });
+    // AIS-05: AI-content detection via Pangram. Unlike AIS-02's async Copyleaks flow,
+    // Pangram's classifier call is synchronous, so this triggers-and-returns in one request
+    // rather than accept-then-webhook — same sync-vs-async split as AIS-03's copy-check
+    // (sync) vs. AIS-02's plagiarism-check (async). Never shown to the submitting student
+    // (AIS-05 acceptance criterion) — enforced by the same teacher-or-Admin gate as
+    // AIS-02/AIS-03, not by hiding an otherwise-reachable route. Re-checking replaces the
+    // previous report for this submission rather than accumulating stale ones.
+    [HttpPost("submissions/{id}/ai-detection")]
+    public async Task<IActionResult> AiDetection(Guid id)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var submission = await db.Submissions.Include(s => s.Assignment).FirstOrDefaultAsync(s => s.Id == id);
+        if (submission is null)
+        {
+            return NotFound();
+        }
+        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        {
+            return Forbid();
+        }
+
+        AiDetectionResult result;
+        try
+        {
+            result = await pangram.DetectAsync(submission.ContentUrl);
+        }
+        catch (ExternalServiceNotConfiguredException)
+        {
+            return StatusCode(503, new
+            {
+                error = "service_not_configured",
+                message = "AI-content detection is not configured for this deployment (missing Pangram credentials).",
+            });
+        }
+
+        var report = await db.AiDetectionReports.FirstOrDefaultAsync(r => r.SubmissionId == id);
+        if (report is null)
+        {
+            report = new AiDetectionReport { Id = Guid.NewGuid(), SubmissionId = id };
+            db.AiDetectionReports.Add(report);
+        }
+        report.AiLikelihoodScore = (decimal)result.AiLikelihoodScore;
+        report.PangramReportId = result.ReportId;
+        report.CheckedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        return Ok(ToAiDetectionDto(report));
+    }
 
     // AIS-03: compares this assignment's submissions against each other via the
     // self-hosted embedding-similarity model, flagging matches at >=90% (per
@@ -505,6 +556,9 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         r.Id, r.SubmissionId, r.SimilarityScore, r.CopyleaksScanId,
         string.IsNullOrEmpty(r.MatchedSources) ? [] : JsonSerializer.Deserialize<List<string>>(r.MatchedSources) ?? [],
         r.CheckedAt);
+
+    private static AiDetectionReportDto ToAiDetectionDto(AiDetectionReport r) => new(
+        r.Id, r.SubmissionId, r.AiLikelihoodScore, r.PangramReportId, r.CheckedAt);
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 

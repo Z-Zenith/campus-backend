@@ -30,11 +30,11 @@ public class AssignmentsControllerTests
     private static Department NewDepartment() => new() { Id = Guid.NewGuid(), Name = "CS", CollegeId = Guid.NewGuid() };
 
     private static AssignmentsController ControllerAs(
-        AppDbContext db, User user, FakeAiServicesClient? aiServices = null, FakeCopyleaksClient? copyleaks = null)
+        AppDbContext db, User user, FakeAiServicesClient? aiServices = null, FakeCopyleaksClient? copyleaks = null, FakePangramClient? pangram = null)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient())
+        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient(), pangram ?? new FakePangramClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -185,7 +185,7 @@ public class AssignmentsControllerTests
     }
 
     private static AssignmentsController ControllerAs(AppDbContext db, Guid userId) =>
-        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient())
+        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient(), new FakePangramClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -554,5 +554,92 @@ public class AssignmentsControllerTests
         var result = await controller.Grade(submission.Id, new ConfirmGradeRequest(suggestion.Id));
 
         Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // AIS-05
+    [Fact]
+    public async Task Ais05_AiDetection_ForbidsCallersWhoAreNotTheAssignmentsTeacher()
+    {
+        await using var db = NewDb();
+        var otherTeacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = Guid.NewGuid(), Title = "A1", Type = AssignmentType.Essay, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var submission = new Submission { Id = Guid.NewGuid(), AssignmentId = assignment.Id, StudentId = Guid.NewGuid(), ContentUrl = "an essay", SubmittedAt = DateTime.UtcNow, IsLate = false, IsAutosubmitted = false };
+        db.Users.Add(otherTeacher);
+        db.Assignments.Add(assignment);
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherTeacher);
+        var result = await controller.AiDetection(submission.Id);
+
+        Assert.IsType<ForbidResult>(result);
+    }
+
+    [Fact]
+    public async Task Ais05_AiDetection_WithoutPangramConfigured_Returns503()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Essay, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var submission = new Submission { Id = Guid.NewGuid(), AssignmentId = assignment.Id, StudentId = Guid.NewGuid(), ContentUrl = "an essay", SubmittedAt = DateTime.UtcNow, IsLate = false, IsAutosubmitted = false };
+        db.Users.Add(teacher);
+        db.Assignments.Add(assignment);
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, pangram: new FakePangramClient { Configured = false });
+        var result = Assert.IsType<ObjectResult>(await controller.AiDetection(submission.Id));
+
+        Assert.Equal(503, result.StatusCode);
+    }
+
+    [Fact]
+    public async Task Ais05_AiDetection_PersistsAndReturnsTheScore()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Essay, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var submission = new Submission { Id = Guid.NewGuid(), AssignmentId = assignment.Id, StudentId = Guid.NewGuid(), ContentUrl = "an essay", SubmittedAt = DateTime.UtcNow, IsLate = false, IsAutosubmitted = false };
+        db.Users.Add(teacher);
+        db.Assignments.Add(assignment);
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+
+        var fakePangram = new FakePangramClient { ResultToReturn = new(0.87, "pangram-report-1") };
+        var controller = ControllerAs(db, teacher, pangram: fakePangram);
+        var result = Assert.IsType<OkObjectResult>(await controller.AiDetection(submission.Id));
+
+        var dto = Assert.IsType<AiDetectionReportDto>(result.Value);
+        Assert.Equal(0.87m, dto.AiLikelihoodScore);
+        Assert.Equal("pangram-report-1", dto.PangramReportId);
+        Assert.Equal("an essay", fakePangram.LastContent);
+
+        var stored = Assert.Single(await db.AiDetectionReports.ToListAsync());
+        Assert.Equal(submission.Id, stored.SubmissionId);
+    }
+
+    // Mirrors Ais03_CopyCheck_ReCheckReplacesPreviousFlags — re-running must update the
+    // existing report, not accumulate a second row for the same submission.
+    [Fact]
+    public async Task Ais05_AiDetection_ReCheckUpdatesTheExistingReport_RatherThanDuplicatingIt()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Essay, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var submission = new Submission { Id = Guid.NewGuid(), AssignmentId = assignment.Id, StudentId = Guid.NewGuid(), ContentUrl = "an essay", SubmittedAt = DateTime.UtcNow, IsLate = false, IsAutosubmitted = false };
+        db.Users.Add(teacher);
+        db.Assignments.Add(assignment);
+        db.Submissions.Add(submission);
+        db.AiDetectionReports.Add(new AiDetectionReport { Id = Guid.NewGuid(), SubmissionId = submission.Id, AiLikelihoodScore = 0.2m, CheckedAt = DateTime.UtcNow.AddDays(-1) });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, pangram: new FakePangramClient { ResultToReturn = new(0.91, "pangram-report-2") });
+        var result = Assert.IsType<OkObjectResult>(await controller.AiDetection(submission.Id));
+
+        var dto = Assert.IsType<AiDetectionReportDto>(result.Value);
+        Assert.Equal(0.91m, dto.AiLikelihoodScore);
+        var stored = Assert.Single(await db.AiDetectionReports.ToListAsync());
+        Assert.Equal(0.91m, stored.AiLikelihoodScore);
+        Assert.Equal("pangram-report-2", stored.PangramReportId);
     }
 }

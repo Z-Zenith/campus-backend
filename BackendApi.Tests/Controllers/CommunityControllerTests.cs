@@ -284,6 +284,50 @@ public class CommunityControllerTests
         };
     }
 
+    // Supports AWA-12's section picker. Gated on create_group specifically, not just any
+    // authenticated caller — same rule enforced on CreateGroup itself.
+    [Fact]
+    public async Task ListSections_ForbidsCallersWithoutCreateGroupPermission()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.ListSections();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListSections_ReturnsOnlySectionsInCallersOwnCollege()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
+
+        var ownDepartment = new Department { Id = Guid.NewGuid(), CollegeId = teacher.CollegeId, Name = "CS" };
+        var ownSection = new Section { Id = Guid.NewGuid(), DepartmentId = ownDepartment.Id, Year = 1, Name = "A" };
+        db.Departments.Add(ownDepartment);
+        db.Sections.Add(ownSection);
+
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "ME" };
+        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Year = 1, Name = "A" };
+        db.Departments.Add(otherDepartment);
+        db.Sections.Add(otherSection);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.ListSections();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var sections = Assert.IsType<List<SectionSummaryDto>>(ok.Value);
+        var section = Assert.Single(sections);
+        Assert.Equal(ownSection.Id, section.Id);
+        Assert.Equal("CS", section.DepartmentName);
+    }
 
     // TWA-05, AWA-12
     [Fact]

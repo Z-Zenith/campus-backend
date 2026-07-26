@@ -4,6 +4,8 @@ namespace BackendApi.Contracts;
 
 public record CreateGroupRequest(string Name, GroupType Type, Guid? SectionId);
 
+public record SectionSummaryDto(Guid Id, string Name, Guid DepartmentId, string DepartmentName);
+
 public record GroupDto(Guid Id, string Name, string Type, Guid? SectionId);
 
 public record MyGroupsResponse(List<GroupDto> Groups);

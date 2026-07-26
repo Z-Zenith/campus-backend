@@ -89,6 +89,36 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         return Ok(new ProvisionClassGroupsResponse(sectionsNeedingGroups.Count, membershipsAdded));
     }
 
+    // Supports the SubjectSection section picker on AWA-12's create-group form (Admin has
+    // no "active section" concept the way a teacher does via TWA-02, so it needs an actual
+    // list to choose from instead). Gated on create_group specifically — the same permission
+    // that gates the action this list exists to support — rather than any broader read
+    // permission, so a caller who can't create a group can't use this as a side-channel to
+    // enumerate section names either.
+    [HttpGet("sections")]
+    public async Task<ActionResult<List<SectionSummaryDto>>> ListSections()
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_group"))
+        {
+            return Forbid();
+        }
+
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var sections = await db.Sections
+            .Include(s => s.Department)
+            .Where(s => s.Department.CollegeId == caller.CollegeId)
+            .OrderBy(s => s.Department.Name).ThenBy(s => s.Name)
+            .Select(s => new SectionSummaryDto(s.Id, s.Name, s.DepartmentId, s.Department.Name))
+            .ToListAsync();
+        return Ok(sections);
+    }
+
     // TWA-05, AWA-12. The auto-provisioned class group (API-02) is not created through
     // this endpoint — GroupType.Class is reserved for that automation, so a caller can't
     // hand-create a second "class group" for a section.

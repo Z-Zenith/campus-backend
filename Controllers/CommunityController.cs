@@ -133,20 +133,29 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         return Ok(ToDto(group));
     }
 
-    // AWA-06: "no group is excluded from Admin's view regardless of who created it" —
-    // institution-wide, not scoped to the caller's own college the way most other
-    // reads are (Lecturer/HoD/Admin all hold view_all_groups; in practice only Admin's
-    // "institution" is meaningfully broader than a teacher's own membership list).
+    // AWA-06: "no group is excluded from Admin's view regardless of who created it" — an
+    // institution here means the caller's own college (AWA-06 is an institution-wide, i.e.
+    // college-wide, view). #126: view_all_groups is a global-scoped permission enforced
+    // platform-wide today; without the college filter any holder could enumerate every
+    // group across every college. Scoped to the caller's own college, mirroring
+    // ProvisionClassGroups above (and RolesController's per-college list filtering), so the
+    // AWA-06 "regardless of who created it" intent is preserved within the college.
     [HttpGet("groups")]
     public async Task<ActionResult<MyGroupsResponse>> AllGroups()
     {
-        var userId = CurrentUserId();
-        if (!await permissions.HasPermissionAsync(userId, "view_all_groups"))
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (!await permissions.HasPermissionAsync(caller.Id, "view_all_groups"))
         {
             return Forbid();
         }
 
-        var groups = await db.Groups.ToListAsync();
+        var groups = await db.Groups
+            .Where(g => g.CollegeId == caller.CollegeId)
+            .ToListAsync();
         return Ok(new MyGroupsResponse(groups.Select(ToDto).ToList()));
     }
 

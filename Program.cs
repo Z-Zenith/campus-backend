@@ -119,6 +119,17 @@ if (string.IsNullOrWhiteSpace(jwtKey))
             ? "Missing Jwt:Key configuration. Set it in appsettings.Development.json (untracked/local) or the JWT__Key environment variable."
             : "Missing Jwt:Key configuration. Set the JWT__Key environment variable before starting in a non-Development environment.");
 }
+// Same fail-fast shape as the connection-string dev-placeholder guard above (#137): the
+// committed appsettings.Development.json ships a well-known dev-only signing key. A build
+// deployed with ASPNETCORE_ENVIRONMENT unset/mis-set could otherwise start up signing and
+// validating tokens with this public value, letting anyone forge a valid JWT for any user.
+const string DevJwtKeyPlaceholder = "dev-only-signing-key-change-me-before-any-real-deployment-32b";
+if (!builder.Environment.IsDevelopment() && jwtKey == DevJwtKeyPlaceholder)
+{
+    throw new InvalidOperationException(
+        "Jwt:Key is still the committed dev-only placeholder from appsettings.Development.json. " +
+        "Set the JWT__Key environment variable to a real secret before starting in a non-Development environment.");
+}
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

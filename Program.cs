@@ -122,6 +122,16 @@ builder.Services.AddHttpClient<IAiServicesClient, AiServicesClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["AiServices:BaseUrl"] ?? "http://ai-services:8000");
 });
 
+// SEK-01: self-hosted Code Execution Service (Judge0 — see campus-platform's
+// judge0-server, loopback-only, reached over the compose network in production/docker
+// deployments). Defaults to the compose service name/port, same fallback pattern as
+// AiServices:BaseUrl above.
+builder.Services.AddHttpClient<IJudge0Client, Judge0Client>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Judge0:BaseUrl"] ?? "http://judge0-server:2358");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 // AIS-02: Copyleaks — external, credentialed (Copyleaks:Email/ApiKey/WebhookSecret).
 // No default base URL fallback: an empty ApiKey/Email already fails closed inside
 // CopyleaksClient via ExternalServiceNotConfiguredException, so there's no safe

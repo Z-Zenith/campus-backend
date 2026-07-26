@@ -105,6 +105,8 @@ builder.Services.AddSignalR();
 builder.Services.AddHostedService<NoLoginAlertHostedService>();
 // AWA-05
 builder.Services.AddHostedService<FeeReminderHostedService>();
+// API-02
+builder.Services.AddHostedService<ClassGroupProvisioningHostedService>();
 
 if (builder.Environment.IsDevelopment())
 {

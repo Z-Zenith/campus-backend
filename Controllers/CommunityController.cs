@@ -16,11 +16,14 @@ namespace BackendApi.Controllers;
 public class CommunityController(AppDbContext db, IPermissionService permissions, IConfiguration configuration) : ControllerBase
 {
     // API-02: "one class group created per class [section], every semester... no manual
-    // step required." No semester-start scheduler exists yet, so this is triggered
-    // manually (or by a future scheduled job) rather than firing automatically. Fully
-    // idempotent: a section that already has a Class group is skipped when creating, and
-    // every Class group's membership is re-synced against current section_enrollments on
-    // every call, so newly-enrolled students get added without duplicating existing rows.
+    // step required." Automatic provisioning is now handled by
+    // ClassGroupProvisioningHostedService's periodic sweep (no Semester/term entity exists
+    // in this schema to hook a real semester-boundary event to, so a scheduled sweep is the
+    // pragmatic stand-in — same pattern as FeeReminderHostedService for AWA-05). This
+    // endpoint remains for on-demand/manual triggering, scoped to the caller's own college.
+    // All actual logic lives in ClassGroupProvisioningScanner (unit-testable, shared with the
+    // hosted service) — this endpoint only owns the admin-auth + college-scoping + response
+    // shape.
     [HttpPost("groups/provision-class-groups")]
     public async Task<ActionResult<ProvisionClassGroupsResponse>> ProvisionClassGroups()
     {
@@ -37,50 +40,9 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         // #114 review: scope to the caller's own college, matching CreateGroup's
         // creator.CollegeId scoping — without this an Admin at one college could
         // provision/modify class groups institution-wide across all colleges.
-        var sectionsNeedingGroups = await db.Sections
-            .Include(s => s.Department)
-            .Where(s => s.Department.CollegeId == caller.CollegeId)
-            .Where(s => !db.Groups.Any(g => g.SectionId == s.Id && g.Type == GroupType.Class))
-            .ToListAsync();
+        var (sectionsProvisioned, membershipsAdded) = await ClassGroupProvisioningScanner.ScanAsync(db, caller.CollegeId);
 
-        foreach (var section in sectionsNeedingGroups)
-        {
-            db.Groups.Add(new Group
-            {
-                Id = Guid.NewGuid(),
-                CollegeId = section.Department.CollegeId,
-                Name = section.Name,
-                Type = GroupType.Class,
-                SectionId = section.Id,
-                CreatedBy = caller.Id,
-            });
-        }
-        await db.SaveChangesAsync();
-
-        var classGroups = await db.Groups
-            .Where(g => g.Type == GroupType.Class && g.CollegeId == caller.CollegeId)
-            .ToListAsync();
-        var membershipsAdded = 0;
-        foreach (var group in classGroups)
-        {
-            var enrolledStudentIds = await db.SectionEnrollments
-                .Where(e => e.SectionId == group.SectionId)
-                .Select(e => e.StudentId)
-                .ToListAsync();
-            var existingMemberIds = await db.GroupMembers
-                .Where(m => m.GroupId == group.Id)
-                .Select(m => m.UserId)
-                .ToListAsync();
-
-            foreach (var studentId in enrolledStudentIds.Except(existingMemberIds))
-            {
-                db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = studentId });
-                membershipsAdded++;
-            }
-        }
-        await db.SaveChangesAsync();
-
-        return Ok(new ProvisionClassGroupsResponse(sectionsNeedingGroups.Count, membershipsAdded));
+        return Ok(new ProvisionClassGroupsResponse(sectionsProvisioned, membershipsAdded));
     }
 
     // TWA-05, AWA-12. The auto-provisioned class group (API-02) is not created through

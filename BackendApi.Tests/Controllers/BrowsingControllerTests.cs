@@ -493,7 +493,11 @@ public class BrowsingControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        // #126: caller and target must share a college — the college-scope guard (fix:
+        // enforce college scope on browsing-summary) 404s a cross-college target before any
+        // summary is generated. Previously these two got different random colleges from
+        // NewUser and this test only passed because that scope check didn't exist yet.
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         db.Users.AddRange(admin, student);
         db.PermissionGrants.Add(GrantViewBrowsingHistory(admin.Id));
         db.BrowsingHistories.Add(new BrowsingHistory { Id = Guid.NewGuid(), StudentId = student.Id, Url = "https://example.com", VisitedAt = DateTime.UtcNow, DurationSeconds = 120 });
@@ -522,6 +526,27 @@ public class BrowsingControllerTests
         var result = await controller.BrowsingSummary(Guid.NewGuid());
 
         Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    // #126 (fix: enforce college scope on browsing-summary) — a College-A caller holding
+    // view_browsing_history must not generate/persist a summary for a College-B student;
+    // the cross-college target 404s (existing collapse convention) and nothing is written.
+    [Fact]
+    public async Task Ais01_BrowsingSummary_ReturnsNotFound_ForStudentInAnotherCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var otherCollegeStudent = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, otherCollegeStudent);
+        db.PermissionGrants.Add(GrantViewBrowsingHistory(admin.Id));
+        db.BrowsingHistories.Add(new BrowsingHistory { Id = Guid.NewGuid(), StudentId = otherCollegeStudent.Id, Url = "https://example.com", VisitedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.BrowsingSummary(otherCollegeStudent.Id);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+        Assert.Empty(await db.BrowsingHistorySummaries.ToListAsync());
     }
 
     // AIS-01

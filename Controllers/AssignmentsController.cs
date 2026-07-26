@@ -79,6 +79,86 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         return Ok(ToDto(assignment));
     }
 
+    // Backs the assignment list page (no equivalent existed before — Create() was the only
+    // assignment endpoint, so there was no UI path to a submissions/grading view at all).
+    // Scoped to assignments the caller owns (TeacherId == caller), same as every other
+    // teacher-facing endpoint in this controller.
+    [HttpGet("assignments/mine")]
+    public async Task<ActionResult<List<AssignmentSummaryDto>>> Mine()
+    {
+        var userId = CurrentUserId();
+
+        var assignments = await db.Assignments
+            .Where(a => a.TeacherId == userId)
+            .Include(a => a.Subject)
+            .OrderByDescending(a => a.DueDate)
+            .ToListAsync();
+        var assignmentIds = assignments.Select(a => a.Id).ToList();
+
+        var submissionCounts = await db.Submissions
+            .Where(s => assignmentIds.Contains(s.AssignmentId))
+            .GroupBy(s => s.AssignmentId)
+            .Select(g => new { AssignmentId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.AssignmentId, g => g.Count);
+
+        return Ok(assignments.Select(a => new AssignmentSummaryDto(
+            a.Id, a.SubjectId, a.Subject.Name, a.Title, a.Type.ToString(), a.DueDate,
+            submissionCounts.GetValueOrDefault(a.Id))).ToList());
+    }
+
+    // Backs the Submissions tab of the assignment detail page — the roster (every student
+    // enrolled in a section this assignment's subject is taught to, same scoping as
+    // IsEnrolledInAssignmentSubjectAsync) cross-referenced against actual Submission rows,
+    // so a teacher can see who has and hasn't submitted, not just a flat list of submissions.
+    [HttpGet("assignments/{id}/submissions")]
+    public async Task<ActionResult<List<AssignmentSubmissionStatusDto>>> Submissions(Guid id)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var assignment = await db.Assignments.FindAsync(id);
+        if (assignment is null)
+        {
+            return NotFound();
+        }
+        if (caller.AccountType is not AccountType.AdminTier && assignment.TeacherId != caller.Id)
+        {
+            return Forbid();
+        }
+
+        var taughtSectionIds = await db.TeacherSectionAssignments
+            .Where(a => a.SubjectId == assignment.SubjectId)
+            .Select(a => a.SectionId)
+            .ToListAsync();
+
+        var students = await db.SectionEnrollments
+            .Where(e => taughtSectionIds.Contains(e.SectionId))
+            .Select(e => e.Student)
+            .Distinct()
+            .OrderBy(s => s.FullName)
+            .ToListAsync();
+
+        var submissions = await db.Submissions
+            .Where(s => s.AssignmentId == id)
+            .ToListAsync();
+        var submissionByStudent = submissions.ToDictionary(s => s.StudentId);
+
+        var rows = students.Select(s =>
+        {
+            if (!submissionByStudent.TryGetValue(s.Id, out var submission))
+            {
+                return new AssignmentSubmissionStatusDto(s.Id, s.FullName, "Missing", null, null, false);
+            }
+            var status = submission.IsLate ? "Late" : "Submitted";
+            return new AssignmentSubmissionStatusDto(s.Id, s.FullName, status, submission.Id, submission.SubmittedAt, submission.IsAutosubmitted);
+        }).ToList();
+
+        return Ok(rows);
+    }
+
     // SDA-10. SDA-11 (auto-submit on exit) is Track 1 — a different trigger path
     // (student-desktop exit detection), implemented below in AutoSubmit(). Manual
     // submissions always leave IsAutosubmitted=false so the teacher's view can tell
@@ -155,6 +235,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         };
         db.Submissions.Add(submission);
         await db.SaveChangesAsync();
+        await TriggerPlagiarismCheckAsync(submission);
 
         return Ok(ToSubmissionDto(submission));
     }
@@ -239,6 +320,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         };
         db.Submissions.Add(submission);
         await db.SaveChangesAsync();
+        await TriggerPlagiarismCheckAsync(submission);
 
         return Ok(ToSubmissionDto(submission));
     }
@@ -268,15 +350,9 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
             return Forbid();
         }
 
-        var scanId = id.ToString("N");
         try
         {
-            // No secret in the URL: it would leak into access/proxy logs. The shared secret
-            // is carried in the scan's properties.developerPayload instead (set by
-            // CopyleaksClient) and validated from the webhook body by WebhooksController.
-            var webhookUrlTemplate =
-                $"{Request.Scheme}://{Request.Host}/api/v1/webhooks/copyleaks/{scanId}/{{status}}";
-            await copyleaks.SubmitScanAsync(scanId, submission.ContentUrl, webhookUrlTemplate);
+            await SubmitPlagiarismScanAsync(submission);
         }
         catch (ExternalServiceNotConfiguredException)
         {
@@ -287,7 +363,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
             });
         }
 
-        return Accepted(new PlagiarismCheckAcceptedDto(id, scanId, "pending"));
+        return Accepted(new PlagiarismCheckAcceptedDto(id, submission.Id.ToString("N"), "pending"));
     }
 
     // Never shown to the submitting student (AIS-02 acceptance criterion) — enforced here
@@ -460,6 +536,39 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         await db.SaveChangesAsync();
 
         return Ok(new ConfirmedGradeDto(suggestion.Id, suggestion.SubmissionId, suggestion.SuggestedGrade, suggestion.ConfirmedByTeacher, suggestion.ConfirmedAt));
+    }
+
+    // AIS-02: the actual scan-kickoff call, shared by both the automatic (Submit/AutoSubmit)
+    // and manual re-trigger (RequestPlagiarismCheck) paths. Throws
+    // ExternalServiceNotConfiguredException when Copyleaks credentials are missing — each
+    // caller decides what that means for itself (see the two callers below).
+    private async Task SubmitPlagiarismScanAsync(Submission submission)
+    {
+        var scanId = submission.Id.ToString("N");
+        // No secret in the URL: it would leak into access/proxy logs. The shared secret is
+        // carried in the scan's properties.developerPayload instead (set by CopyleaksClient)
+        // and validated from the webhook body by WebhooksController.
+        var webhookUrlTemplate =
+            $"{Request.Scheme}://{Request.Host}/api/v1/webhooks/copyleaks/{scanId}/{{status}}";
+        await copyleaks.SubmitScanAsync(scanId, submission.ContentUrl, webhookUrlTemplate);
+    }
+
+    // AIS-02's acceptance criterion requires the similarity score to exist "before the
+    // teacher grades it" — i.e. computed automatically at submission time, not manually
+    // triggered by the teacher later (the RequestPlagiarismCheck endpoint above predates
+    // this and is kept only as a manual re-check). Called from both Submit() and
+    // AutoSubmit() right after the submission is persisted. Best-effort: an unconfigured
+    // Copyleaks deployment must not block the student's ability to submit — the Grading
+    // tab (PR 9) renders a missing report as "not available" rather than failing here.
+    private async Task TriggerPlagiarismCheckAsync(Submission submission)
+    {
+        try
+        {
+            await SubmitPlagiarismScanAsync(submission);
+        }
+        catch (ExternalServiceNotConfiguredException)
+        {
+        }
     }
 
     // #135: a student is "enrolled in this assignment's subject" if they're a member of

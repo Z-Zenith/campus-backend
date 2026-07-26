@@ -70,6 +70,40 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         };
 
         db.Users.Add(user);
+
+        // A freshly-created teacher account previously got no RoleBinding at all, so
+        // HasPermissionAsync("create_group") (and every other role-default permission,
+        // e.g. add_internal_marks) returned false until an Admin separately bound them via
+        // RolesController — meaning "create a group" silently 403'd for TWA-05's own stated
+        // acceptance criterion ("every teacher account... can create at least one group").
+        // Bind every new teacher to the baseline "lecturer" role by default; HoD or any
+        // additional role/permission grant is still assigned separately via RolesController
+        // as before — this only establishes the floor every teacher account is guaranteed.
+        //
+        // Scope matters here, not just the role code: roles.default_scope_kind seeds
+        // "lecturer" as department-scoped (db/init/02_seed_roles_and_permissions.sql), the
+        // same restriction RolesController.CreateRoleBinding enforces for any *manually*
+        // created lecturer binding (ScopeKind.Department requires a DepartmentId). Hardcoding
+        // Global here would grant a broader scope than an Admin manually binding the same
+        // role would ever be allowed to create — a real privilege escalation even though
+        // HasPermissionAsync doesn't currently branch on ScopeType for this role, since any
+        // future scope-aware check (or a department-scoped read like GetDepartmentScopeAsync
+        // gaining a lecturer case) must not retroactively see this account as global-scoped.
+        // Global is only a fallback for the (permitted, per CreateUserRequest) case where no
+        // department was supplied at all — TWA-05's guarantee must hold even then.
+        if (request.AccountType == AccountType.Teacher)
+        {
+            db.RoleBindings.Add(new RoleBinding
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                RoleCode = "lecturer",
+                ScopeType = user.DepartmentId is not null ? ScopeKind.Department : ScopeKind.Global,
+                DepartmentId = user.DepartmentId,
+                GrantedAt = DateTime.UtcNow,
+            });
+        }
+
         await db.SaveChangesAsync();
 
         var provisioningUri = totpService.BuildProvisioningUri(totpSecret, request.Identifier, "Campus Platform");
@@ -104,9 +138,26 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         var isSelf = caller.Id == id;
         var isValidCrossViewTarget = user.AccountType == AccountType.Student && user.CollegeId == caller.CollegeId;
 
+        // New TWA teacher-facing performance view (per-student, not just TWA-04's
+        // section-aggregate dashboard) — deliberately scoped narrower than the
+        // college-wide view_all_student_performance grant: a teacher can view performance
+        // only for a student enrolled in a section that teacher is actually assigned to
+        // (same TeacherSectionAssignments + SectionEnrollments join every other
+        // teacher-scoped endpoint in this codebase uses, e.g. MarksController.InternalRoster).
+        // This is treated as an extension of access the teacher already effectively has via
+        // TWA-04's section aggregate and TWA-16's marks entry, not a new broad grant — it
+        // does NOT extend to canViewRecords (remarks/browsing-history/suspicious-flags),
+        // which stay gated behind the more sensitive view_all_student_records permission.
+        var isTeachersOwnStudent = !isSelf
+            && caller.AccountType == AccountType.Teacher
+            && user.AccountType == AccountType.Student
+            && user.CollegeId == caller.CollegeId
+            && await IsTeachersOwnStudentAsync(caller.Id, id);
+
         var canViewRecords = isSelf
             || (isValidCrossViewTarget && await permissions.HasPermissionAsync(caller.Id, "view_all_student_records"));
         var canViewPerformance = isSelf
+            || isTeachersOwnStudent
             || (isValidCrossViewTarget && await permissions.HasPermissionAsync(caller.Id, "view_all_student_performance"));
 
         if (!canViewRecords && !canViewPerformance)
@@ -222,5 +273,25 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
     {
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
         return await db.Users.FindAsync(userId);
+    }
+
+    // Same shape as MarksController.InternalRoster's authorization check: the student must
+    // be enrolled in a section the teacher holds at least one TeacherSectionAssignment for —
+    // it doesn't matter which subject, since this gates a general performance view, not a
+    // subject-specific one.
+    private async Task<bool> IsTeachersOwnStudentAsync(Guid teacherId, Guid studentId)
+    {
+        var teacherSectionIds = await db.TeacherSectionAssignments
+            .Where(a => a.TeacherId == teacherId)
+            .Select(a => a.SectionId)
+            .Distinct()
+            .ToListAsync();
+        if (teacherSectionIds.Count == 0)
+        {
+            return false;
+        }
+
+        return await db.SectionEnrollments
+            .AnyAsync(e => e.StudentId == studentId && teacherSectionIds.Contains(e.SectionId));
     }
 }

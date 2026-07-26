@@ -96,7 +96,7 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
     // may actually enter marks for, instead of requiring student ids to be typed blind.
     [HttpGet("internal/roster")]
     [Authorize]
-    public async Task<ActionResult<List<InternalMarksRosterEntryDto>>> InternalRoster([FromQuery] Guid subjectId, [FromQuery] Guid? assignmentId)
+    public async Task<ActionResult<List<InternalMarksRosterEntryDto>>> InternalRoster([FromQuery] Guid subjectId, [FromQuery] Guid? assignmentId, [FromQuery] Guid? sectionId = null)
     {
         var userId = CurrentUserId();
         if (!await permissions.HasPermissionAsync(userId, "add_internal_marks"))
@@ -104,8 +104,17 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
             return Forbid();
         }
 
-        var teacherSectionIds = await db.TeacherSectionAssignments
-            .Where(a => a.TeacherId == userId && a.SubjectId == subjectId)
+        // sectionId scopes the roster to a single section instead of unioning across every
+        // section the teacher teaches this subject to — without it, a teacher who teaches the
+        // same subject to two sections previously saw both sections' students intermixed with
+        // no way to tell them apart, despite the UI implying single-section scoping.
+        var assignmentsQuery = db.TeacherSectionAssignments
+            .Where(a => a.TeacherId == userId && a.SubjectId == subjectId);
+        if (sectionId is { } scopedSectionId)
+        {
+            assignmentsQuery = assignmentsQuery.Where(a => a.SectionId == scopedSectionId);
+        }
+        var teacherSectionIds = await assignmentsQuery
             .Select(a => a.SectionId)
             .ToListAsync();
         if (teacherSectionIds.Count == 0)

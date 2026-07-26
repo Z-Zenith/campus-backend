@@ -8,11 +8,23 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace BackendApi.Tests.Controllers;
 
 public class UsersControllerTests
 {
+    // CreateGroup (exercised via CommunityController below) never touches material storage —
+    // this test only needs the constructor to be satisfiable, not a real/fake upload path.
+    private sealed class NoopMaterialStorageClient : IMaterialStorageClient
+    {
+        public Task UploadAsync(Stream content, string key, string contentType, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<string> GetPresignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default) =>
+            Task.FromResult("");
+    }
+
     private static AppDbContext NewDb()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -289,6 +301,102 @@ public class UsersControllerTests
             admin.CollegeId, AccountType.Student, "new-student", "initial-pass1", "New Student", null));
 
         Assert.IsType<CreatedAtActionResult>(result.Result);
+    }
+
+    // Regression test: a freshly-created teacher account previously had no RoleBinding at
+    // all, so TWA-05's acceptance criterion ("every teacher account, regardless of role, can
+    // create at least one group") silently failed with a 403 until an Admin separately bound
+    // them to a role via RolesController. Create() must now bind new teachers to "lecturer"
+    // by default, and that binding must be sufficient — end-to-end through the real
+    // PermissionService, not a manually-injected grant — for CreateGroup to succeed.
+    [Fact]
+    public async Task Create_NewTeacherIsBoundToLecturerRole_SoTheyCanImmediatelyCreateAGroup()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = admin.Id,
+            PermissionCode = "manage_accounts",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        // Mirrors the real seed data (db/init/02_seed_roles_and_permissions.sql): "lecturer"
+        // holds create_group by default.
+        db.Permissions.Add(new Permission { Code = "create_group", Description = "x" });
+        var lecturerRole = new Role { Code = "lecturer" };
+        lecturerRole.PermissionCodes.Add(db.Permissions.Local.First());
+        db.Roles.Add(lecturerRole);
+        await db.SaveChangesAsync();
+
+        var usersController = ControllerAs(db, admin);
+        var createResult = await usersController.Create(new CreateUserRequest(
+            admin.CollegeId, AccountType.Teacher, "new-teacher", "initial-pass1", "New Teacher", null));
+        var created = Assert.IsType<CreatedAtActionResult>(createResult.Result);
+        var response = Assert.IsType<CreateUserResponse>(created.Value);
+
+        var binding = await db.RoleBindings.SingleOrDefaultAsync(b => b.UserId == response.UserId);
+        Assert.NotNull(binding);
+        Assert.Equal("lecturer", binding!.RoleCode);
+        Assert.Equal(ScopeKind.Global, binding.ScopeType);
+
+        var newTeacher = await db.Users.FindAsync(response.UserId);
+        var communityController = new CommunityController(db, new PermissionService(db), new ConfigurationBuilder().Build(), new NoopMaterialStorageClient())
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [new Claim(ClaimTypes.NameIdentifier, newTeacher!.Id.ToString())], "TestAuth")),
+                },
+            },
+        };
+
+        var groupResult = await communityController.CreateGroup(new CreateGroupRequest("New teacher's group", GroupType.TeacherOnly, null));
+
+        Assert.IsType<OkObjectResult>(groupResult.Result);
+    }
+
+    // Companion to the test above: when the request DOES supply a department, the auto-bound
+    // lecturer RoleBinding must be Department-scoped to that department, matching
+    // roles.default_scope_kind's seeded value for "lecturer" — not silently upgraded to
+    // Global scope. RolesController.CreateRoleBinding enforces exactly this restriction for
+    // any *manually* created binding (a department-scoped role requires a DepartmentId); the
+    // auto-created binding must be held to the same restriction, not exempted from it.
+    [Fact]
+    public async Task Create_NewTeacherWithDepartment_IsBoundToLecturerRole_ScopedToThatDepartment()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "CS" };
+        db.Users.Add(admin);
+        db.Departments.Add(department);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = admin.Id,
+            PermissionCode = "manage_accounts",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var usersController = ControllerAs(db, admin);
+        var createResult = await usersController.Create(new CreateUserRequest(
+            admin.CollegeId, AccountType.Teacher, "new-teacher-2", "initial-pass1", "New Teacher", department.Id));
+        var created = Assert.IsType<CreatedAtActionResult>(createResult.Result);
+        var response = Assert.IsType<CreateUserResponse>(created.Value);
+
+        var binding = await db.RoleBindings.SingleOrDefaultAsync(b => b.UserId == response.UserId);
+        Assert.NotNull(binding);
+        Assert.Equal("lecturer", binding!.RoleCode);
+        Assert.Equal(ScopeKind.Department, binding.ScopeType);
+        Assert.Equal(department.Id, binding.DepartmentId);
     }
 
     // AWA-10 — same reasoning as Awa09_Create_ForbidsCallersWithoutManageAccountsPermission —
@@ -644,6 +752,96 @@ public class UsersControllerTests
 
         var controller = ControllerAs(db, admin);
         var result = await controller.GetProfile(otherCollegeStudent.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // New teacher-facing per-student performance view: scoped to a teacher's own students
+    // (via TeacherSectionAssignments + SectionEnrollments), not the college-wide
+    // view_all_student_performance grant — a teacher needs no special permission for a
+    // student they actually teach.
+    [Fact]
+    public async Task GetProfile_AllowsTeacherToViewPerformance_ForTheirOwnEnrolledStudent()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = sectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = sectionId, SubjectId = subjectId });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = sectionId, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<StudentRecordDto>(ok.Value);
+        Assert.Equal(student.Id, dto.Id);
+    }
+
+    // The teacher-own-student path must not also unlock canViewRecords (remarks,
+    // browsing-history, suspicious flags) — that stays behind view_all_student_records,
+    // materially more sensitive than marks.
+    [Fact]
+    public async Task GetProfile_TeacherOwnStudentPath_DoesNotUnlockRecordsData()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = sectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = sectionId, SubjectId = subjectId });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = sectionId, StudentId = student.Id });
+        db.TeacherReports.Add(new TeacherReport { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, Content = "confidential remark", SubmittedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<StudentRecordDto>(ok.Value);
+        Assert.Empty(dto.Remarks);
+    }
+
+    // A teacher who teaches other sections, but not one this student is enrolled in, gets
+    // no special access — confirms the check is enrollment-specific, not "any assignment
+    // exists for this teacher at all."
+    [Fact]
+    public async Task GetProfile_ForbidsTeacher_ForStudentNotInAnyOfTheirSections()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var teacherSectionId = Guid.NewGuid();
+        var otherSectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = teacherSectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Sections.Add(new Section { Id = otherSectionId, DepartmentId = departmentId, Year = 1, Name = "B" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = teacherSectionId, SubjectId = subjectId });
+        // Student is enrolled in a DIFFERENT section — one this teacher has no assignment for.
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = otherSectionId, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
 
         Assert.IsType<ForbidResult>(result.Result);
     }

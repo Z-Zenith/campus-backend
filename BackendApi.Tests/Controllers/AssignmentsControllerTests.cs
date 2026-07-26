@@ -137,6 +137,93 @@ public class AssignmentsControllerTests
         Assert.False(dto.IsAutosubmitted);
     }
 
+    // AIS-02's acceptance criterion requires the similarity score to be computed
+    // automatically at submission time, not manually triggered later by the teacher —
+    // Submit() must kick off the Copyleaks scan itself.
+    [Fact]
+    public async Task Submit_TriggersPlagiarismCheckAutomatically()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, student);
+        var (_, assignment) = SeedAssignment(db, teacher, student);
+        await db.SaveChangesAsync();
+
+        var fakeCopyleaks = new FakeCopyleaksClient();
+        var controller = ControllerAs(db, student, copyleaks: fakeCopyleaks);
+        var result = await controller.Submit(assignment.Id, new SubmitAssignmentRequest("https://example.com/a.pdf", AssignmentType.FileUpload));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        Assert.Equal("https://example.com/a.pdf", fakeCopyleaks.LastContent);
+    }
+
+    [Fact]
+    public async Task AutoSubmit_TriggersPlagiarismCheckAutomatically()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, student);
+        var (_, assignment) = SeedAssignment(db, teacher, student);
+        await db.SaveChangesAsync();
+
+        var fakeCopyleaks = new FakeCopyleaksClient();
+        var controller = ControllerAs(db, student, copyleaks: fakeCopyleaks);
+        var result = await controller.AutoSubmit(assignment.Id, new SubmitAssignmentRequest("https://example.com/auto.pdf", AssignmentType.FileUpload));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        Assert.Equal("https://example.com/auto.pdf", fakeCopyleaks.LastContent);
+    }
+
+    // Best-effort: an unconfigured Copyleaks deployment must not block a student's ability
+    // to submit — the submission itself must still succeed.
+    [Fact]
+    public async Task Submit_SucceedsEvenWhenCopyleaksIsNotConfigured()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, student);
+        var (_, assignment) = SeedAssignment(db, teacher, student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student, copyleaks: new FakeCopyleaksClient { Configured = false });
+        var result = await controller.Submit(assignment.Id, new SubmitAssignmentRequest("https://example.com/a.pdf", AssignmentType.FileUpload));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Mine_ReturnsOnlyCallersOwnAssignments_WithSubmissionCount()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var otherTeacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, otherTeacher, student);
+        var (_, ownAssignment) = SeedAssignment(db, teacher, student);
+        SeedAssignment(db, otherTeacher, student); // a second, unrelated assignment owned by someone else
+        db.Submissions.Add(new Submission
+        {
+            Id = Guid.NewGuid(),
+            AssignmentId = ownAssignment.Id,
+            StudentId = student.Id,
+            ContentUrl = "https://example.com/a.pdf",
+            SubmittedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.Mine();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var assignments = Assert.IsType<List<AssignmentSummaryDto>>(ok.Value);
+        var summary = Assert.Single(assignments);
+        Assert.Equal(ownAssignment.Id, summary.Id);
+        Assert.Equal(1, summary.SubmissionCount);
+    }
+
     private sealed record Fixture(Guid TeacherId, Guid StudentId, Guid OtherStudentId, Guid SubjectId, Guid SectionId, Guid AssignmentId);
 
     // #135: an assignment's subject is taught to a section via TeacherSectionAssignments,
@@ -196,6 +283,72 @@ public class AssignmentsControllerTests
                 },
             },
         };
+
+    [Fact]
+    public async Task Submissions_MarksEnrolledStudentsAsMissingOrSubmitted()
+    {
+        using var db = NewDb();
+        var fixture = await SeedAsync(db);
+        // Also enroll otherStudentId (unenrolled by default in SeedAsync) so this test has
+        // one student who submitted and one who hasn't.
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = fixture.SectionId, StudentId = fixture.OtherStudentId });
+        db.Submissions.Add(new Submission
+        {
+            Id = Guid.NewGuid(),
+            AssignmentId = fixture.AssignmentId,
+            StudentId = fixture.StudentId,
+            ContentUrl = "https://files.campus.local/a.pdf",
+            SubmittedAt = DateTime.UtcNow,
+            IsLate = false,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, fixture.TeacherId);
+        var result = await controller.Submissions(fixture.AssignmentId);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var rows = Assert.IsType<List<AssignmentSubmissionStatusDto>>(ok.Value);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("Submitted", rows.Single(r => r.StudentId == fixture.StudentId).Status);
+        Assert.Equal("Missing", rows.Single(r => r.StudentId == fixture.OtherStudentId).Status);
+    }
+
+    [Fact]
+    public async Task Submissions_MarksLateSubmissionDistinctly()
+    {
+        using var db = NewDb();
+        var fixture = await SeedAsync(db);
+        db.Submissions.Add(new Submission
+        {
+            Id = Guid.NewGuid(),
+            AssignmentId = fixture.AssignmentId,
+            StudentId = fixture.StudentId,
+            ContentUrl = "https://files.campus.local/late.pdf",
+            SubmittedAt = DateTime.UtcNow,
+            IsLate = true,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, fixture.TeacherId);
+        var result = await controller.Submissions(fixture.AssignmentId);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var rows = Assert.IsType<List<AssignmentSubmissionStatusDto>>(ok.Value);
+        Assert.Equal("Late", Assert.Single(rows).Status);
+    }
+
+    [Fact]
+    public async Task Submissions_ForbidsCallerWhoDoesNotOwnTheAssignment()
+    {
+        using var db = NewDb();
+        var fixture = await SeedAsync(db);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, fixture.OtherStudentId);
+        var result = await controller.Submissions(fixture.AssignmentId);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
 
     [Fact]
     public async Task Submit_Succeeds_WhenStudentIsEnrolledInSubjectsSection()

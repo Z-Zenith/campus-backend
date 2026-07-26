@@ -23,6 +23,18 @@ public record AssignmentDto(
     DateTime SubmissionWindowEnd,
     string? TypeSpecificSettings);
 
+// Backs the assignment list page (PR 8's "grading in the assignment tab" IA) — one row per
+// assignment the teacher owns, with enough summary data (subject name, submission count) to
+// render a table without a follow-up request per row.
+public record AssignmentSummaryDto(
+    Guid Id,
+    Guid SubjectId,
+    string SubjectName,
+    string Title,
+    string Type,
+    DateTime DueDate,
+    int SubmissionCount);
+
 public record SubmitAssignmentRequest(string ContentUrl, AssignmentType SubmissionFormat);
 
 public record SubmissionDto(
@@ -32,6 +44,18 @@ public record SubmissionDto(
     string ContentUrl,
     DateTime SubmittedAt,
     bool IsLate,
+    bool IsAutosubmitted);
+
+// Backs the Submissions tab — one row per student enrolled in a section this assignment's
+// subject is taught to (same scoping as IsEnrolledInAssignmentSubjectAsync), cross-referenced
+// against that student's Submission row if one exists. Status is "Missing" (no row),
+// "Late" (row exists, past due date), or "Submitted".
+public record AssignmentSubmissionStatusDto(
+    Guid StudentId,
+    string StudentName,
+    string Status,
+    Guid? SubmissionId,
+    DateTime? SubmittedAt,
     bool IsAutosubmitted);
 
 // AIS-03: cross-class copy-check among one assignment's submissions, via the

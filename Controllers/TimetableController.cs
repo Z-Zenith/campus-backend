@@ -324,6 +324,51 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         return Ok(students);
     }
 
+    // The authoritative "which sections do I actually teach" list — sourced from
+    // TeacherSectionAssignments, the same table GetSectionPerformanceSummary and
+    // MarksController.InternalRoster check against. Every section-scoped picker in the
+    // teacher web app (Reports, Marks, Materials, Groups, Assignments) reads this instead of
+    // deriving sections from TimetableSlots, which can go stale after a manual PatchSlot
+    // reassignment and show a section that then 403s downstream.
+    [HttpGet("timetable/sections/mine")]
+    public async Task<ActionResult<List<AssignedSectionDto>>> MySections()
+    {
+        var userId = CurrentUserId();
+        var sections = await db.TeacherSectionAssignments
+            .Where(a => a.TeacherId == userId)
+            .Select(a => a.Section)
+            .Distinct()
+            .OrderBy(s => s.Name)
+            .Select(s => new AssignedSectionDto(s.Id, s.Name))
+            .ToListAsync();
+        return Ok(sections);
+    }
+
+    // Roster scoped by section rather than by a single timetable slot (compare Roster() above,
+    // TWA-08) — needed anywhere a page already knows the section (from the active-section
+    // switcher) and wants its students without going through a specific slot id. Same
+    // authorization rule as GetSectionPerformanceSummary: caller must hold at least one
+    // TeacherSectionAssignment for this section.
+    [HttpGet("timetable/sections/{sectionId}/roster")]
+    public async Task<ActionResult<List<SectionRosterStudentDto>>> SectionRoster(Guid sectionId)
+    {
+        var userId = CurrentUserId();
+        var teachesSection = await db.TeacherSectionAssignments
+            .AnyAsync(a => a.TeacherId == userId && a.SectionId == sectionId);
+        if (!teachesSection)
+        {
+            return Forbid();
+        }
+
+        var students = await db.SectionEnrollments
+            .Where(e => e.SectionId == sectionId)
+            .Include(e => e.Student)
+            .OrderBy(e => e.Student.FullName)
+            .Select(e => new SectionRosterStudentDto(e.StudentId, e.Student.FullName, e.Student.Identifier))
+            .ToListAsync();
+        return Ok(students);
+    }
+
     // TWA-12 — a teacher rates a section they've taught. Written in the exact shape
     // Generate() above reads for AWA-02 (feedback-based teacher exclusion): one row
     // per submission in section_feedback, keyed by (teacher_id, section_id, rating).

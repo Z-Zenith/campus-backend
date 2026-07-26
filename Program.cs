@@ -8,6 +8,7 @@ using BackendApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -18,7 +19,31 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 
 builder.Services.AddControllers(options => options.Filters.Add<SessionActiveFilter>())
-    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()))
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        // Every hand-written validation failure in this codebase returns { error, message }
+        // (e.g. AssignmentsController.Create, MarksController.CreateInternal), and the
+        // frontend's readErrorMessage() is built to extract `.message` from exactly that
+        // shape. But a malformed route/query/body value (e.g. a non-GUID subjectId) fails
+        // ASP.NET Core's automatic model-state validation before the action ever runs, and
+        // previously fell back to the framework's default ValidationProblemDetails shape
+        // (title/errors, no message) — which rendered as raw JSON in the UI instead of a
+        // readable message. Normalize to the same { error, message } shape everywhere so
+        // every 400 looks the same to the frontend, regardless of which layer caught it.
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            var firstError = context.ModelState.Values
+                .SelectMany(v => v.Errors)
+                .Select(e => e.ErrorMessage)
+                .FirstOrDefault(m => !string.IsNullOrEmpty(m));
+            return new BadRequestObjectResult(new
+            {
+                error = "invalid_request",
+                message = firstError ?? "One or more request values are invalid.",
+            });
+        };
+    });
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi(options =>
 {
@@ -131,6 +156,13 @@ builder.Services.AddHttpClient<ICopyleaksClient, CopyleaksClient>(client =>
     var baseUrl = builder.Configuration["Copyleaks:BaseUrl"] ?? "https://api.copyleaks.com";
     client.BaseAddress = new Uri(baseUrl);
 });
+
+// TWA-06: Cloudflare R2 (Cloudflare:R2:AccountId/AccessKeyId/SecretAccessKey/BucketName).
+// Same fail-closed pattern as Copyleaks above — an unconfigured deployment throws
+// ExternalServiceNotConfiguredException only when Materials upload/download is actually
+// used, not at startup. AmazonS3Client is safe to share as a singleton (thread-safe, no
+// per-request state), so the wrapping client is singleton-scoped too.
+builder.Services.AddSingleton<IMaterialStorageClient, R2MaterialStorageClient>();
 
 var jwtSection = builder.Configuration.GetSection("Jwt");
 var jwtKey = jwtSection["Key"];

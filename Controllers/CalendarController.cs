@@ -54,6 +54,32 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         return Ok(new EventDto(newEvent.Id, newEvent.Title, newEvent.StartTime, newEvent.EndTime, false));
     }
 
+    // TWA-15 only specifies event *creation* — there's no documented feature ID for a
+    // teacher/admin calendar *view*, and ListEvents/MyCalendar below are both hard-gated to
+    // AccountType.Student. This backs a new teacher-facing list view. Staff see every event
+    // in their own college — RestrictedYears/RestrictedDepartments are a student-eligibility
+    // filter (which years/departments can register), not a staff-visibility rule, so they
+    // don't apply here the way EligibleEventsQuery applies them for students.
+    [HttpGet("events/mine")]
+    public async Task<ActionResult<List<EventDto>>> MyEvents()
+    {
+        var caller = await db.Users.FindAsync(CurrentUserId());
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (caller.AccountType is not (AccountType.Teacher or AccountType.AdminTier))
+        {
+            return Forbid();
+        }
+
+        var events = await db.Events
+            .Where(e => e.CollegeId == caller.CollegeId)
+            .OrderBy(e => e.StartTime)
+            .ToListAsync();
+        return Ok(events.Select(e => new EventDto(e.Id, e.Title, e.StartTime, e.EndTime, false)).ToList());
+    }
+
     // SDA-20
     [HttpGet("events")]
     public async Task<ActionResult<List<EventDto>>> ListEvents()

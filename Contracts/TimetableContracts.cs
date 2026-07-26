@@ -25,6 +25,17 @@ public record ChangeRequestDto(Guid Id, string Description, string Status, DateT
 // TWA-08
 public record RosterStudentDto(Guid StudentId, string FullName);
 
+// Sourced from TeacherSectionAssignments (not TimetableSlots) so it matches the same table
+// GetSectionPerformanceSummary/MarksController.InternalRoster authorize against — unlike the
+// timetable-derived section list, this can't show a section that then 403s after a manual
+// PatchSlot reassignment.
+public record AssignedSectionDto(Guid SectionId, string SectionName);
+
+// Roster scoped by section (not by a single timetable slot, unlike TWA-08's Roster above) —
+// used by Reports' student picker, Marks' section-scoped roster, and Assignments' Submissions
+// tab. Identifier is the student's roll number (also their login username).
+public record SectionRosterStudentDto(Guid StudentId, string FullName, string Identifier);
+
 public record AttendanceEntryRequest(Guid StudentId, string Status);
 
 // SessionDate defaults to today (server time) when omitted — covers the common "mark

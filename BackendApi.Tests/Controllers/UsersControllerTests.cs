@@ -755,4 +755,94 @@ public class UsersControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
     }
+
+    // New teacher-facing per-student performance view: scoped to a teacher's own students
+    // (via TeacherSectionAssignments + SectionEnrollments), not the college-wide
+    // view_all_student_performance grant — a teacher needs no special permission for a
+    // student they actually teach.
+    [Fact]
+    public async Task GetProfile_AllowsTeacherToViewPerformance_ForTheirOwnEnrolledStudent()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = sectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = sectionId, SubjectId = subjectId });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = sectionId, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<StudentRecordDto>(ok.Value);
+        Assert.Equal(student.Id, dto.Id);
+    }
+
+    // The teacher-own-student path must not also unlock canViewRecords (remarks,
+    // browsing-history, suspicious flags) — that stays behind view_all_student_records,
+    // materially more sensitive than marks.
+    [Fact]
+    public async Task GetProfile_TeacherOwnStudentPath_DoesNotUnlockRecordsData()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = sectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = sectionId, SubjectId = subjectId });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = sectionId, StudentId = student.Id });
+        db.TeacherReports.Add(new TeacherReport { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, Content = "confidential remark", SubmittedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<StudentRecordDto>(ok.Value);
+        Assert.Empty(dto.Remarks);
+    }
+
+    // A teacher who teaches other sections, but not one this student is enrolled in, gets
+    // no special access — confirms the check is enrollment-specific, not "any assignment
+    // exists for this teacher at all."
+    [Fact]
+    public async Task GetProfile_ForbidsTeacher_ForStudentNotInAnyOfTheirSections()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var teacherSectionId = Guid.NewGuid();
+        var otherSectionId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var student = NewUser(AccountType.Student, collegeId);
+        db.Users.AddRange(teacher, student);
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = teacherSectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Sections.Add(new Section { Id = otherSectionId, DepartmentId = departmentId, Year = 1, Name = "B" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = departmentId, Code = "CS101", Name = "Intro" });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = teacherSectionId, SubjectId = subjectId });
+        // Student is enrolled in a DIFFERENT section — one this teacher has no assignment for.
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = otherSectionId, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.GetProfile(student.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
 }

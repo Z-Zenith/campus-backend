@@ -138,9 +138,26 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         var isSelf = caller.Id == id;
         var isValidCrossViewTarget = user.AccountType == AccountType.Student && user.CollegeId == caller.CollegeId;
 
+        // New TWA teacher-facing performance view (per-student, not just TWA-04's
+        // section-aggregate dashboard) — deliberately scoped narrower than the
+        // college-wide view_all_student_performance grant: a teacher can view performance
+        // only for a student enrolled in a section that teacher is actually assigned to
+        // (same TeacherSectionAssignments + SectionEnrollments join every other
+        // teacher-scoped endpoint in this codebase uses, e.g. MarksController.InternalRoster).
+        // This is treated as an extension of access the teacher already effectively has via
+        // TWA-04's section aggregate and TWA-16's marks entry, not a new broad grant — it
+        // does NOT extend to canViewRecords (remarks/browsing-history/suspicious-flags),
+        // which stay gated behind the more sensitive view_all_student_records permission.
+        var isTeachersOwnStudent = !isSelf
+            && caller.AccountType == AccountType.Teacher
+            && user.AccountType == AccountType.Student
+            && user.CollegeId == caller.CollegeId
+            && await IsTeachersOwnStudentAsync(caller.Id, id);
+
         var canViewRecords = isSelf
             || (isValidCrossViewTarget && await permissions.HasPermissionAsync(caller.Id, "view_all_student_records"));
         var canViewPerformance = isSelf
+            || isTeachersOwnStudent
             || (isValidCrossViewTarget && await permissions.HasPermissionAsync(caller.Id, "view_all_student_performance"));
 
         if (!canViewRecords && !canViewPerformance)
@@ -256,5 +273,25 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
     {
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
         return await db.Users.FindAsync(userId);
+    }
+
+    // Same shape as MarksController.InternalRoster's authorization check: the student must
+    // be enrolled in a section the teacher holds at least one TeacherSectionAssignment for —
+    // it doesn't matter which subject, since this gates a general performance view, not a
+    // subject-specific one.
+    private async Task<bool> IsTeachersOwnStudentAsync(Guid teacherId, Guid studentId)
+    {
+        var teacherSectionIds = await db.TeacherSectionAssignments
+            .Where(a => a.TeacherId == teacherId)
+            .Select(a => a.SectionId)
+            .Distinct()
+            .ToListAsync();
+        if (teacherSectionIds.Count == 0)
+        {
+            return false;
+        }
+
+        return await db.SectionEnrollments
+            .AnyAsync(e => e.StudentId == studentId && teacherSectionIds.Contains(e.SectionId));
     }
 }

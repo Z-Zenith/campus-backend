@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
 using BackendApi.Hubs;
@@ -19,7 +20,28 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers(options => options.Filters.Add<SessionActiveFilter>())
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    // The global JsonStringEnumConverter registered on the MVC pipeline above (line ~20)
+    // is NOT visible to the OpenAPI document generator's own JsonSerializerOptions, so it
+    // emits every enum as `type: integer`. The live API actually serializes enums as their
+    // PascalCase member-name strings (JsonStringEnumConverter default), so the generated
+    // snapshot must reflect that or a generated client would break on every enum.
+    // Rewrite each enum schema to `type: string` with the member names as `enum` values.
+    options.AddSchemaTransformer((schema, context, cancellationToken) =>
+    {
+        var clrType = context.JsonTypeInfo.Type;
+        if (clrType.IsEnum)
+        {
+            schema.Type = Microsoft.OpenApi.JsonSchemaType.String;
+            schema.Format = null; // drop the stale "int32" format from the integer schema
+            schema.Enum = Enum.GetNames(clrType)
+                .Select(name => (JsonNode)JsonValue.Create(name))
+                .ToList();
+        }
+        return Task.CompletedTask;
+    });
+});
 
 var connectionString = builder.Configuration.GetConnectionString("Campus")
     ?? throw new InvalidOperationException("Missing ConnectionStrings:Campus configuration.");

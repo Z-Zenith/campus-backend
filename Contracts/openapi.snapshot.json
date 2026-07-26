@@ -3672,13 +3672,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "secret",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -3712,7 +3705,13 @@
   "components": {
     "schemas": {
       "AccountType": {
-        "type": "integer"
+        "enum": [
+          "Student",
+          "Teacher",
+          "AdminTier",
+          "Parent"
+        ],
+        "type": "string"
       },
       "ApproveExternalMarkResponse": {
         "required": [
@@ -3823,7 +3822,13 @@
         }
       },
       "AssignmentType": {
-        "type": "integer"
+        "enum": [
+          "Code",
+          "Quiz",
+          "Essay",
+          "FileUpload"
+        ],
+        "type": "string"
       },
       "AttendanceAlertDto": {
         "required": [
@@ -4892,7 +4897,13 @@
         }
       },
       "GroupType": {
-        "type": "integer"
+        "enum": [
+          "Class",
+          "SubjectSection",
+          "Club",
+          "TeacherOnly"
+        ],
+        "type": "string"
       },
       "InternalMarkDto": {
         "required": [
@@ -5938,7 +5949,11 @@
         }
       },
       "ScopeKind": {
-        "type": "integer"
+        "enum": [
+          "Global",
+          "Department"
+        ],
+        "type": "string"
       },
       "SectionFeedbackDto": {
         "required": [

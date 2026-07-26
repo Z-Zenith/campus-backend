@@ -187,6 +187,42 @@ public class MarksControllerTests
         Assert.IsType<ForbidResult>(result.Result);
     }
 
+    // Regression test for the "students from two sections show intermixed" bug: a teacher
+    // teaching the same subject to two sections previously always got both sections' rosters
+    // unioned together with no way to scope to just one. Passing sectionId must now filter to
+    // only that section's enrolled students.
+    [Fact]
+    public async Task InternalRoster_ScopesToSingleSection_WhenSectionIdProvided_EvenIfTeachingSameSubjectToTwoSections()
+    {
+        using var db = NewDb();
+        var fixture = await SeedAsync(db);
+
+        // A second section, same subject, same teacher — a different student enrolled there.
+        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = Guid.NewGuid(), Year = 1, Name = "B" };
+        var otherStudent = new User { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Identifier = "student-2", PasswordHash = "hash", FullName = "Student Two", IsActive = true, AccountType = AccountType.Student };
+        db.Sections.Add(otherSection);
+        db.Users.Add(otherStudent);
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = fixture.TeacherId, SectionId = otherSection.Id, SubjectId = fixture.SubjectId });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = otherSection.Id, StudentId = otherStudent.Id });
+        await db.SaveChangesAsync();
+
+        var controller = BuildController(db, fixture.TeacherId);
+
+        // Without sectionId: both sections' students appear (today's existing, intentional
+        // fallback behavior for callers that don't yet pass a section).
+        var unscoped = await controller.InternalRoster(fixture.SubjectId, null);
+        var unscopedOk = Assert.IsType<OkObjectResult>(unscoped.Result);
+        var unscopedRoster = Assert.IsType<List<InternalMarksRosterEntryDto>>(unscopedOk.Value);
+        Assert.Equal(2, unscopedRoster.Count);
+
+        // With sectionId: only that section's student appears.
+        var scoped = await controller.InternalRoster(fixture.SubjectId, null, fixture.SectionId);
+        var scopedOk = Assert.IsType<OkObjectResult>(scoped.Result);
+        var scopedRoster = Assert.IsType<List<InternalMarksRosterEntryDto>>(scopedOk.Value);
+        var entry = Assert.Single(scopedRoster);
+        Assert.Equal(fixture.StudentId, entry.StudentId);
+    }
+
     [Fact]
     public async Task CreateInternal_DoesNotUnpublishOnSubsequentUnpublishedEdit()
     {

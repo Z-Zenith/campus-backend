@@ -34,10 +34,7 @@ public class AssignmentsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Copyleaks:WebhookSecret"] = "test-secret" })
-            .Build();
-        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient(), configuration)
+        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -188,7 +185,7 @@ public class AssignmentsControllerTests
     }
 
     private static AssignmentsController ControllerAs(AppDbContext db, Guid userId) =>
-        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient(), new ConfigurationBuilder().Build())
+        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -379,7 +376,10 @@ public class AssignmentsControllerTests
         Assert.Equal("pending", accepted.Status);
         Assert.Equal(submission.Id.ToString("N"), fakeCopyleaks.LastScanId);
         Assert.Equal("an essay", fakeCopyleaks.LastContent);
-        Assert.Contains("secret=test-secret", fakeCopyleaks.LastWebhookUrlTemplate);
+        // The shared secret must NOT ride in the webhook URL (it would leak into access/proxy
+        // logs); it now travels in properties.developerPayload in the submit body instead.
+        Assert.DoesNotContain("secret", fakeCopyleaks.LastWebhookUrlTemplate!);
+        Assert.Contains(submission.Id.ToString("N"), fakeCopyleaks.LastWebhookUrlTemplate!);
     }
 
     [Fact]

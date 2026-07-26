@@ -70,6 +70,40 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         };
 
         db.Users.Add(user);
+
+        // A freshly-created teacher account previously got no RoleBinding at all, so
+        // HasPermissionAsync("create_group") (and every other role-default permission,
+        // e.g. add_internal_marks) returned false until an Admin separately bound them via
+        // RolesController — meaning "create a group" silently 403'd for TWA-05's own stated
+        // acceptance criterion ("every teacher account... can create at least one group").
+        // Bind every new teacher to the baseline "lecturer" role by default; HoD or any
+        // additional role/permission grant is still assigned separately via RolesController
+        // as before — this only establishes the floor every teacher account is guaranteed.
+        //
+        // Scope matters here, not just the role code: roles.default_scope_kind seeds
+        // "lecturer" as department-scoped (db/init/02_seed_roles_and_permissions.sql), the
+        // same restriction RolesController.CreateRoleBinding enforces for any *manually*
+        // created lecturer binding (ScopeKind.Department requires a DepartmentId). Hardcoding
+        // Global here would grant a broader scope than an Admin manually binding the same
+        // role would ever be allowed to create — a real privilege escalation even though
+        // HasPermissionAsync doesn't currently branch on ScopeType for this role, since any
+        // future scope-aware check (or a department-scoped read like GetDepartmentScopeAsync
+        // gaining a lecturer case) must not retroactively see this account as global-scoped.
+        // Global is only a fallback for the (permitted, per CreateUserRequest) case where no
+        // department was supplied at all — TWA-05's guarantee must hold even then.
+        if (request.AccountType == AccountType.Teacher)
+        {
+            db.RoleBindings.Add(new RoleBinding
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                RoleCode = "lecturer",
+                ScopeType = user.DepartmentId is not null ? ScopeKind.Department : ScopeKind.Global,
+                DepartmentId = user.DepartmentId,
+                GrantedAt = DateTime.UtcNow,
+            });
+        }
+
         await db.SaveChangesAsync();
 
         var provisioningUri = totpService.BuildProvisioningUri(totpSecret, request.Identifier, "Campus Platform");

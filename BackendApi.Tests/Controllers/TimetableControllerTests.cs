@@ -802,4 +802,92 @@ public class TimetableControllerTests
         Assert.Equal(admin.Id, routed.RecipientId);
         Assert.Equal(NotificationType.TimetableRequest, routed.Type);
     }
+
+    // MySections() must be sourced from TeacherSectionAssignments, not TimetableSlots — this
+    // is what fixes Dashboard's false-403 (a section can appear on the teacher's timetable via
+    // a manually-patched slot without a matching TeacherSectionAssignment ever existing).
+    [Fact]
+    public async Task MySections_ReturnsOnlySectionsFromTeacherSectionAssignments_NotFromTimetableSlots()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var teacher = NewUser(AccountType.Teacher);
+        var assignedSection = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        db.Departments.Add(department);
+        db.Users.Add(teacher);
+        db.Sections.Add(assignedSection);
+        db.Subjects.Add(subject);
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = assignedSection.Id, SubjectId = subject.Id });
+
+        // A slot for a *different* section exists on the teacher's timetable (e.g. via a
+        // manual PatchSlot reassignment) with no corresponding TeacherSectionAssignment —
+        // MySections must NOT include it.
+        var unassignedSection = NewSection(department.Id);
+        db.Sections.Add(unassignedSection);
+        db.TimetableSlots.Add(new TimetableSlot
+        {
+            Id = Guid.NewGuid(),
+            SectionId = unassignedSection.Id,
+            SubjectId = subject.Id,
+            TeacherId = teacher.Id,
+            DayOfWeek = 1,
+            StartTime = new TimeOnly(9, 0),
+            EndTime = new TimeOnly(10, 0),
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.MySections();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var sections = Assert.IsType<List<AssignedSectionDto>>(ok.Value);
+        var section = Assert.Single(sections);
+        Assert.Equal(assignedSection.Id, section.SectionId);
+    }
+
+    [Fact]
+    public async Task SectionRoster_ReturnsEnrolledStudentsWithIdentifier_WhenTeacherAssignedToSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var teacher = NewUser(AccountType.Teacher);
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var student = NewUser(AccountType.Student);
+        db.Departments.Add(department);
+        db.Users.AddRange(teacher, student);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = section.Id, SubjectId = subject.Id });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.SectionRoster(section.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var roster = Assert.IsType<List<SectionRosterStudentDto>>(ok.Value);
+        var entry = Assert.Single(roster);
+        Assert.Equal(student.Id, entry.StudentId);
+        Assert.Equal(student.Identifier, entry.Identifier);
+    }
+
+    [Fact]
+    public async Task SectionRoster_Forbidden_WhenTeacherNotAssignedToSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var teacher = NewUser(AccountType.Teacher);
+        var section = NewSection(department.Id);
+        db.Departments.Add(department);
+        db.Users.Add(teacher);
+        db.Sections.Add(section);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.SectionRoster(section.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
 }

@@ -125,6 +125,99 @@ public class CommunityControllerTests
         Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
     }
 
+    private static IFormFile FakeFormFile(string fileName, string contentType, int sizeBytes = 100)
+    {
+        var stream = new MemoryStream(new byte[sizeBytes]);
+        return new FormFile(stream, 0, stream.Length, "file", fileName) { Headers = new HeaderDictionary(), ContentType = contentType };
+    }
+
+    [Fact]
+    public async Task UploadMaterialFile_UploadsToStorageAndStoresR2PrefixedKey()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var subjectId = Guid.NewGuid();
+        db.Departments.Add(new Department { Id = Guid.NewGuid(), CollegeId = teacher.CollegeId, Name = "CS" });
+        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = db.Departments.Local.First().Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var storage = new FakeMaterialStorageClient();
+        var controller = ControllerAs(db, teacher, materialStorage: storage);
+
+        var result = await controller.UploadMaterialFile(new UploadMaterialFileRequest
+        {
+            Title = "Week 1 slides",
+            SubjectId = subjectId,
+            File = FakeFormFile("slides.pdf", "application/pdf"),
+        });
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<MaterialDto>(ok.Value);
+        Assert.StartsWith("r2://materials/", dto.FileUrl);
+        Assert.Single(storage.Uploaded);
+        Assert.Equal("application/pdf", storage.Uploaded[0].ContentType);
+    }
+
+    [Fact]
+    public async Task UploadMaterialFile_RejectsUnsupportedContentType()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var controller = ControllerAs(db, teacher);
+
+        var result = await controller.UploadMaterialFile(new UploadMaterialFileRequest
+        {
+            Title = "Malware?",
+            GroupId = Guid.NewGuid(),
+            File = FakeFormFile("app.exe", "application/x-msdownload"),
+        });
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task UploadMaterialFile_RejectsFileLargerThanConfiguredLimit()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection([new KeyValuePair<string, string?>("MaterialStorage:MaxUploadSizeBytes", "10")])
+            .Build();
+        var controller = ControllerAs(db, teacher, config);
+
+        var result = await controller.UploadMaterialFile(new UploadMaterialFileRequest
+        {
+            Title = "Too big",
+            GroupId = Guid.NewGuid(),
+            File = FakeFormFile("slides.pdf", "application/pdf", sizeBytes: 100),
+        });
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task DownloadMaterial_RedirectsToPresignedUrl_ForR2StoredMaterial()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Notes",
+            FileUrl = "r2://materials/some-college/some-key.pdf",
+            UploadedBy = teacher.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, teacher);
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.Equal("https://fake-r2.example/materials/some-college/some-key.pdf?presigned=1", redirect.Url);
+    }
+
     private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
     {
         Id = Guid.NewGuid(),
@@ -159,11 +252,30 @@ public class CommunityControllerTests
         CreatedAt = DateTime.UtcNow,
     };
 
-    private static CommunityController ControllerAs(AppDbContext db, User user, IConfiguration? configuration = null)
+    // In-memory fake so UploadMaterialFile/DownloadMaterial tests don't need real R2
+    // credentials or network access — records what was "uploaded" and returns a
+    // deterministic, inspectable presigned URL.
+    private sealed class FakeMaterialStorageClient : IMaterialStorageClient
+    {
+        public List<(string Key, string ContentType)> Uploaded { get; } = [];
+
+        public Task UploadAsync(Stream content, string key, string contentType, CancellationToken ct = default)
+        {
+            Uploaded.Add((key, contentType));
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetPresignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct = default) =>
+            Task.FromResult($"https://fake-r2.example/{key}?presigned=1");
+    }
+
+    private static CommunityController ControllerAs(
+        AppDbContext db, User user, IConfiguration? configuration = null, IMaterialStorageClient? materialStorage = null)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new CommunityController(db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build())
+        return new CommunityController(
+            db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build(), materialStorage ?? new FakeMaterialStorageClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -171,6 +283,7 @@ public class CommunityControllerTests
             },
         };
     }
+
 
     // TWA-05, AWA-12
     [Fact]

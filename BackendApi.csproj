@@ -27,6 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.101.4" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
@@ -45,9 +46,7 @@
   </ItemGroup>
 
   <Target Name="RenameOpenApiSnapshot" AfterTargets="GenerateOpenApiDocuments">
-    <Move SourceFiles="$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json"
-          DestinationFiles="$(MSBuildProjectDirectory)/Contracts/openapi.snapshot.json"
-          Condition="Exists('$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json')" />
+    <Move SourceFiles="$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json" DestinationFiles="$(MSBuildProjectDirectory)/Contracts/openapi.snapshot.json" Condition="Exists('$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json')" />
   </Target>
 
 </Project>

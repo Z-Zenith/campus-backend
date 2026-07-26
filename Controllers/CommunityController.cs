@@ -14,8 +14,13 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class CommunityController(AppDbContext db, IPermissionService permissions, IConfiguration configuration) : ControllerBase
+public class CommunityController(AppDbContext db, IPermissionService permissions, IConfiguration configuration, IMaterialStorageClient materialStorage) : ControllerBase
 {
+    // Marks a Material.FileUrl value as "this is an R2 object key, not a real URL" — lets
+    // DownloadMaterial distinguish rows created via UploadMaterialFile (below) from the
+    // older UploadMaterial flow (a teacher-supplied absolute URL) without a schema change,
+    // since FileUrl stays a plain text column either way.
+    private const string R2KeyPrefix = "r2://";
     // API-02: "one class group created per class [section], every semester... no manual
     // step required." No semester-start scheduler exists yet, so this is triggered
     // manually (or by a future scheduled job) rather than firing automatically. Fully
@@ -312,6 +317,116 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         return Ok(ToDto(material));
     }
 
+    // Content types accepted for a real file upload — covers the document/media shapes a
+    // course-materials feature actually needs, not an open-ended allowlist.
+    private static readonly HashSet<string> AllowedMaterialContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/plain",
+        "image/png",
+        "image/jpeg",
+        "video/mp4",
+        "application/zip",
+    };
+
+    // TWA-06: real file upload, replacing the "paste a URL" flow above — Material.FileUrl
+    // was always intended to be an object-storage path (campus-platform-db-api-schema.md:
+    // "file_url | text | GCS path, India region"), not a teacher-supplied arbitrary link;
+    // this is the flow that actually matches that intent, uploading to Cloudflare R2 and
+    // storing the resulting key (prefixed with R2KeyPrefix — see DownloadMaterial).
+    [HttpPost("materials/upload")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(MaxUploadSizeBytesDefault)]
+    public async Task<ActionResult<MaterialDto>> UploadMaterialFile([FromForm] UploadMaterialFileRequest request)
+    {
+        var uploader = await CurrentUserAsync();
+        if (uploader is null)
+        {
+            return Unauthorized();
+        }
+        if (uploader.AccountType is not (AccountType.Teacher or AccountType.AdminTier))
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return BadRequest(new { error = "title_required", message = "Material title must not be empty." });
+        }
+        if (request.File is null || request.File.Length == 0)
+        {
+            return BadRequest(new { error = "file_required", message = "Select a file to upload." });
+        }
+        if (request.File.Length > MaxUploadSizeBytes)
+        {
+            return BadRequest(new
+            {
+                error = "file_too_large",
+                message = $"File exceeds the {MaxUploadSizeBytes / (1024 * 1024)} MB upload limit.",
+            });
+        }
+        if (!AllowedMaterialContentTypes.Contains(request.File.ContentType))
+        {
+            return BadRequest(new { error = "unsupported_file_type", message = $"'{request.File.ContentType}' is not an accepted file type." });
+        }
+        if (request.SubjectId is null && request.GroupId is null)
+        {
+            return BadRequest(new { error = "target_required", message = "Attach material to a subject, a group, or both." });
+        }
+        if (request.SubjectId is not null && !await db.Subjects.AnyAsync(s => s.Id == request.SubjectId))
+        {
+            return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
+        }
+        if (request.GroupId is not null && !await db.Groups.AnyAsync(g => g.Id == request.GroupId))
+        {
+            return BadRequest(new { error = "unknown_group", message = "No group exists with that id." });
+        }
+
+        var materialId = Guid.NewGuid();
+        var safeFileName = string.Join("_", request.File.FileName.Split(Path.GetInvalidFileNameChars()));
+        var key = $"materials/{uploader.CollegeId}/{materialId}-{safeFileName}";
+
+        try
+        {
+            await using var stream = request.File.OpenReadStream();
+            await materialStorage.UploadAsync(stream, key, request.File.ContentType);
+        }
+        catch (ExternalServiceNotConfiguredException)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                error = "storage_not_configured",
+                message = "File upload storage is not configured for this deployment yet.",
+            });
+        }
+
+        var material = new Material
+        {
+            Id = materialId,
+            Title = request.Title.Trim(),
+            FileUrl = R2KeyPrefix + key,
+            SubjectId = request.SubjectId,
+            GroupId = request.GroupId,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+
+        return Ok(ToDto(material));
+    }
+
+    private const long MaxUploadSizeBytesDefault = 26_214_400; // 25 MB, mirrors MaterialStorage:MaxUploadSizeBytes' default.
+
+    private long MaxUploadSizeBytes =>
+        configuration.GetValue<long?>("MaterialStorage:MaxUploadSizeBytes") ?? MaxUploadSizeBytesDefault;
+
     // API-03: this endpoint is the authorization gate in front of file_url — it redirects
     // rather than proxying bytes, since file_url already points at wherever the file is
     // actually hosted. That keeps "byte-identical regardless of which app requested it"
@@ -334,6 +449,19 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         if (!await CanViewMaterialAsync(material, caller))
         {
             return Forbid();
+        }
+
+        // Materials uploaded via UploadMaterialFile (TWA-06 real file upload) store an R2
+        // object key prefixed with R2KeyPrefix instead of a real absolute URL — R2 buckets
+        // are private by default, so these are served via a short-lived presigned URL,
+        // generated fresh per authorized download, rather than a stored permanent link.
+        // Materials created the older way (a teacher-supplied URL string) keep the existing
+        // allowlist-redirect path below, completely unchanged.
+        if (material.FileUrl.StartsWith(R2KeyPrefix, StringComparison.Ordinal))
+        {
+            var key = material.FileUrl[R2KeyPrefix.Length..];
+            var presignedUrl = await materialStorage.GetPresignedDownloadUrlAsync(key, TimeSpan.FromMinutes(5));
+            return Redirect(presignedUrl);
         }
 
         // #136: defense in depth — UploadMaterial already rejects a disallowed host, but this

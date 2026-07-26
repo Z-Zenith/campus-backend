@@ -49,6 +49,16 @@ public class MessagingController(AppDbContext db) : ControllerBase
             return BadRequest("TeacherId must reference an existing user with account type Teacher.");
         }
 
+        // #11: AdminTier bypassed the participant check above unconditionally, letting
+        // an Admin at one college open a DM thread between a student and teacher at a
+        // different college — same cross-college IDOR class CollegeScopeService closes
+        // elsewhere (#126-#129).
+        if (caller.AccountType is AccountType.AdminTier
+            && (caller.CollegeId != student.CollegeId || caller.CollegeId != teacher.CollegeId))
+        {
+            return Forbid();
+        }
+
         var existing = await db.MessageThreads
             .FirstOrDefaultAsync(t => t.StudentId == request.StudentId && t.TeacherId == request.TeacherId);
         if (existing is not null)
@@ -144,6 +154,13 @@ public class MessagingController(AppDbContext db) : ControllerBase
             return Unauthorized();
         }
         if (caller.AccountType is not AccountType.AdminTier && caller.Id != thread.StudentId && caller.Id != thread.TeacherId)
+        {
+            return Forbid();
+        }
+
+        // #11: same cross-college IDOR as CreateThread above — an Admin bypassing the
+        // participant check must still be limited to threads within their own college.
+        if (caller.AccountType is AccountType.AdminTier && !await IsThreadInCollegeAsync(thread, caller.CollegeId))
         {
             return Forbid();
         }
@@ -250,6 +267,9 @@ public class MessagingController(AppDbContext db) : ControllerBase
 
         return Ok(new MarkNotificationReadResponse(notification.Id, notification.ReadAt!.Value));
     }
+
+    private async Task<bool> IsThreadInCollegeAsync(MessageThread thread, Guid collegeId) =>
+        await db.Users.AnyAsync(u => u.Id == thread.StudentId && u.CollegeId == collegeId);
 
     private static MessageThreadResponse ToResponse(MessageThread thread) =>
         new(thread.Id, thread.StudentId, thread.TeacherId, thread.CreatedAt);

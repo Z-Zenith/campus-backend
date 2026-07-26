@@ -137,6 +137,69 @@ public class MessagingControllerTests
         Assert.Single(await db.MessageThreads.ToListAsync());
     }
 
+    // #11: AdminTier previously bypassed the participant check unconditionally — an
+    // Admin at a different college than the student/teacher must not be able to open a
+    // thread between them.
+    [Fact]
+    public async Task CreateThread_ForbidsAdmin_WhenStudentIsAtADifferentCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, otherCollegeId);
+        db.Users.AddRange(student, teacher, admin);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.CreateThread(new CreateThreadRequest(student.Id, teacher.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.MessageThreads.ToListAsync());
+    }
+
+    // #11: same college — an Admin should still be able to open a thread for a
+    // student/teacher pair within their own institution.
+    [Fact]
+    public async Task CreateThread_AllowsAdmin_WhenSameCollegeAsBothParticipants()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, collegeId);
+        db.Users.AddRange(student, teacher, admin);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.CreateThread(new CreateThreadRequest(student.Id, teacher.Id));
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+    }
+
+    // #11: same fix on the read side — an Admin bypassing the participant check in
+    // ListMessages must still be limited to threads within their own college.
+    [Fact]
+    public async Task ListMessages_ForbidsAdmin_WhenThreadIsAtADifferentCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, otherCollegeId);
+        db.Users.AddRange(student, teacher, admin);
+        var thread = new MessageThread { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, CreatedAt = DateTime.UtcNow };
+        db.MessageThreads.Add(thread);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.ListMessages(thread.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
     // #159: ListMessages should paginate rather than always returning every message ever
     // sent in a thread.
     [Fact]

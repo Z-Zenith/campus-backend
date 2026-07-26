@@ -125,6 +125,68 @@ public class CommunityControllerTests
         Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
     }
 
+    // #11: CanViewMaterialAsync previously let any AdminTier account bypass the
+    // group/subject-membership checks unconditionally — an Admin at a different college
+    // than the material's owning group must not be able to download it.
+    [Fact]
+    public async Task DownloadMaterial_ForbidsAdmin_WhenGroupMaterialIsAtADifferentCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, otherCollegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Section A", Type = GroupType.Class };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Notes",
+            FileUrl = "https://storage.campus.local/x.pdf",
+            GroupId = group.Id,
+            UploadedBy = teacher.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.AddRange(teacher, admin);
+        db.Groups.Add(group);
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, admin, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        Assert.IsType<ForbidResult>(result);
+    }
+
+    // #11: same college — an Admin should still be able to download material
+    // belonging to their own institution's group.
+    [Fact]
+    public async Task DownloadMaterial_AllowsAdmin_WhenGroupMaterialIsAtTheSameCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Section A", Type = GroupType.Class };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Notes",
+            FileUrl = "https://storage.campus.local/x.pdf",
+            GroupId = group.Id,
+            UploadedBy = teacher.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.AddRange(teacher, admin);
+        db.Groups.Add(group);
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, admin, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        Assert.IsType<RedirectResult>(result);
+    }
+
     private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
     {
         Id = Guid.NewGuid(),

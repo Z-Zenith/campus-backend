@@ -55,7 +55,18 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
         }
-        if (caller.AccountType is not AccountType.AdminTier && subject.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier)
+        {
+            if (subject.TeacherId != caller.Id)
+            {
+                return Forbid();
+            }
+        }
+        // #11: AdminTier bypassed the teacher-ownership check above unconditionally,
+        // letting an Admin at one college create assignments for a subject taught at a
+        // different college — same cross-college IDOR class CollegeScopeService closes
+        // elsewhere (#126-#129).
+        else if (!await IsSubjectInCollegeAsync(subject.Id, caller.CollegeId))
         {
             return Forbid();
         }
@@ -263,7 +274,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await CanAccessAssignmentAsync(submission.Assignment, caller))
         {
             return Forbid();
         }
@@ -307,7 +318,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await CanAccessAssignmentAsync(submission.Assignment, caller))
         {
             return Forbid();
         }
@@ -344,7 +355,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && assignment.TeacherId != caller.Id)
+        if (!await CanAccessAssignmentAsync(assignment, caller))
         {
             return Forbid();
         }
@@ -399,7 +410,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await CanAccessAssignmentAsync(submission.Assignment, caller))
         {
             return Forbid();
         }
@@ -450,7 +461,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && suggestion.Submission.Assignment.TeacherId != caller.Id)
+        if (!await CanAccessAssignmentAsync(suggestion.Submission.Assignment, caller))
         {
             return Forbid();
         }
@@ -480,6 +491,24 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         return await db.SectionEnrollments
             .AnyAsync(e => e.StudentId == studentId && taughtSectionIds.Contains(e.SectionId));
     }
+
+    // #11: shared by every teacher-or-Admin gate in this controller (previously each
+    // one let AdminTier bypass ownership unconditionally) — an Admin may still act on any
+    // assignment/submission the actual teacher could, but only within the Admin's own
+    // college, matching the cross-college IDOR fix CollegeScopeService applies elsewhere
+    // (#126-#129).
+    private async Task<bool> CanAccessAssignmentAsync(Assignment assignment, User caller)
+    {
+        if (caller.AccountType is not AccountType.AdminTier)
+        {
+            return assignment.TeacherId == caller.Id;
+        }
+
+        return await IsSubjectInCollegeAsync(assignment.SubjectId, caller.CollegeId);
+    }
+
+    private async Task<bool> IsSubjectInCollegeAsync(Guid subjectId, Guid collegeId) =>
+        await db.Subjects.AnyAsync(s => s.Id == subjectId && s.Department.CollegeId == collegeId);
 
     private static bool IsValidJson(string value)
     {

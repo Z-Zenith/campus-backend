@@ -347,9 +347,19 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
     private async Task<bool> CanViewMaterialAsync(Material material, User caller)
     {
-        if (material.UploadedBy == caller.Id || caller.AccountType == AccountType.AdminTier)
+        if (material.UploadedBy == caller.Id)
         {
             return true;
+        }
+
+        // #11: AdminTier previously bypassed every other check here unconditionally,
+        // letting an Admin at one college download material belonging to any other college
+        // (same cross-college IDOR class CollegeScopeService closes elsewhere, #126-#129) —
+        // still bypass the group/subject-membership checks below, but only within the
+        // caller's own college.
+        if (caller.AccountType == AccountType.AdminTier)
+        {
+            return await IsMaterialInCollegeAsync(material, caller.CollegeId);
         }
 
         if (material.GroupId is not null)
@@ -378,6 +388,21 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
             return await db.TimetableSlots
                 .AnyAsync(t => t.SubjectId == material.SubjectId && callerSectionIds.Contains(t.SectionId));
+        }
+
+        return false;
+    }
+
+    private async Task<bool> IsMaterialInCollegeAsync(Material material, Guid collegeId)
+    {
+        if (material.GroupId is not null)
+        {
+            return await db.Groups.AnyAsync(g => g.Id == material.GroupId && g.CollegeId == collegeId);
+        }
+
+        if (material.SubjectId is not null)
+        {
+            return await db.Subjects.AnyAsync(s => s.Id == material.SubjectId && s.Department.CollegeId == collegeId);
         }
 
         return false;

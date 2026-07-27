@@ -474,6 +474,36 @@ CREATE TABLE IF NOT EXISTS documents (
     ocr_status  ocr_status NOT NULL DEFAULT 'pending'
 );
 
+-- SEK-01: a student's multi-file code project. `language` is plain text (validated
+-- app-side by campus-shared-editor-kit's isSupportedLanguage), not an enum like doc_type/
+-- ocr_status above — the SEK-01 launch list is expected to grow, and that runtime guard
+-- already owns this validation, so a Postgres enum here would just be a second, more
+-- disruptive-to-extend copy of the same check.
+CREATE TABLE IF NOT EXISTS code_projects (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id          uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name              text NOT NULL,
+    entry_file_path   text NOT NULL,
+    active_file_path  text NOT NULL,
+    stdin             text NOT NULL DEFAULT '',
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_code_projects_owner_updated
+    ON code_projects (owner_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS code_files (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id  uuid NOT NULL REFERENCES code_projects(id) ON DELETE CASCADE,
+    path        text NOT NULL,
+    language    text NOT NULL,
+    content     text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (project_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_code_files_project ON code_files (project_id);
+
 -- ─── 1.10 Direct Messaging ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS message_threads (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,0 +1,5 @@
+# Shell scripts run inside Linux containers (Postgres docker-entrypoint-initdb.d) — a
+# CRLF checkout (e.g. Windows with core.autocrlf=true) corrupts `set -e` and other
+# lines enough that the script silently no-ops instead of erroring loudly, so this
+# must stay LF regardless of the checkout platform.
+*.sh text eol=lf

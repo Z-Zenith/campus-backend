@@ -9,8 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Controllers;
 
-// Track 2 surface (community/groups/materials) — stubbed here only to keep the shared
-// API contract complete; implementation belongs to Track 2.
+// Track 2 surface (community/groups/materials).
 [ApiController]
 [Route("api/v1")]
 [Authorize]

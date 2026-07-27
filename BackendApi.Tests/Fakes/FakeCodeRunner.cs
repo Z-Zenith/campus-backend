@@ -3,9 +3,9 @@ using BackendApi.Services;
 
 namespace BackendApi.Tests.Fakes;
 
-// SEK-01: a real call to Judge0 isn't available in unit tests (no network dependency),
-// so controller tests configure canned behavior here instead.
-public class FakeJudge0Client : IJudge0Client
+// SEK-01: a real `docker run` isn't available/desirable in unit tests, so controller
+// tests configure canned behavior here instead.
+public class FakeCodeRunner : ICodeRunner
 {
     public string? LastEntryFilePath { get; private set; }
     public IReadOnlyList<CodeFileDto>? LastFiles { get; private set; }

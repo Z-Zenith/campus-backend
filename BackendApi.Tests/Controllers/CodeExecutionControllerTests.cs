@@ -13,25 +13,25 @@ public class CodeExecutionControllerTests
         new("main.txt", [new CodeFileDto("main.txt", language, content)], stdin);
 
     [Fact]
-    public async Task Run_ReturnsResultFromJudge0()
+    public async Task Run_ReturnsResultFromCodeRunner()
     {
-        var judge0 = new FakeJudge0Client { Result = new CodeRunResultDto("2\n", "", 0, 42, false, "accepted") };
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner { Result = new CodeRunResultDto("2\n", "", 0, 42, false, "accepted") };
+        var controller = new CodeExecutionController(codeRunner);
 
         var result = await controller.Run(SingleFileRequest("python", "print(1+1)"));
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var dto = Assert.IsType<CodeRunResultDto>(ok.Value);
         Assert.Equal("2\n", dto.Stdout);
-        Assert.Equal("main.txt", judge0.LastEntryFilePath);
-        Assert.Equal("print(1+1)", judge0.LastFiles?[0].Content);
+        Assert.Equal("main.txt", codeRunner.LastEntryFilePath);
+        Assert.Equal("print(1+1)", codeRunner.LastFiles?[0].Content);
     }
 
     [Fact]
     public async Task Run_PassesAdditionalFilesThrough()
     {
-        var judge0 = new FakeJudge0Client { Result = new CodeRunResultDto("", "", 0, 10, false, "accepted") };
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner { Result = new CodeRunResultDto("", "", 0, 10, false, "accepted") };
+        var controller = new CodeExecutionController(codeRunner);
         var request = new RunCodeProjectRequest("main.py", [
             new CodeFileDto("main.py", "python", "import helper"),
             new CodeFileDto("helper.py", "python", "x = 1"),
@@ -39,40 +39,40 @@ public class CodeExecutionControllerTests
 
         await controller.Run(request);
 
-        Assert.Equal(2, judge0.LastFiles?.Count);
-        Assert.Equal("helper.py", judge0.LastFiles?[1].Path);
+        Assert.Equal(2, codeRunner.LastFiles?.Count);
+        Assert.Equal("helper.py", codeRunner.LastFiles?[1].Path);
     }
 
     [Fact]
     public async Task Run_RejectsEmptyFileList()
     {
-        var judge0 = new FakeJudge0Client();
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner();
+        var controller = new CodeExecutionController(codeRunner);
 
         var result = await controller.Run(new RunCodeProjectRequest("main.py", [], null));
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
-        Assert.Null(judge0.LastEntryFilePath);
+        Assert.Null(codeRunner.LastEntryFilePath);
     }
 
     [Fact]
     public async Task Run_RejectsEntryFileNotInProject()
     {
-        var judge0 = new FakeJudge0Client();
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner();
+        var controller = new CodeExecutionController(codeRunner);
         var request = new RunCodeProjectRequest("missing.py", [new CodeFileDto("main.py", "python", "print(1)")], null);
 
         var result = await controller.Run(request);
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
-        Assert.Null(judge0.LastEntryFilePath);
+        Assert.Null(codeRunner.LastEntryFilePath);
     }
 
     [Fact]
     public async Task Run_ReturnsBadRequest_ForUnsupportedLanguage()
     {
-        var judge0 = new FakeJudge0Client { ThrowOnRun = new UnsupportedLanguageException("brainfuck") };
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner { ThrowOnRun = new UnsupportedLanguageException("brainfuck") };
+        var controller = new CodeExecutionController(codeRunner);
 
         var result = await controller.Run(SingleFileRequest("brainfuck", "+++"));
 
@@ -81,10 +81,10 @@ public class CodeExecutionControllerTests
     }
 
     [Fact]
-    public async Task Run_ReturnsServiceUnavailable_WhenJudge0IsUnreachable()
+    public async Task Run_ReturnsServiceUnavailable_WhenCodeRunnerIsUnreachable()
     {
-        var judge0 = new FakeJudge0Client { ThrowOnRun = new HttpRequestException("connection refused") };
-        var controller = new CodeExecutionController(judge0);
+        var codeRunner = new FakeCodeRunner { ThrowOnRun = new HttpRequestException("connection refused") };
+        var controller = new CodeExecutionController(codeRunner);
 
         var result = await controller.Run(SingleFileRequest("python", "print(1)"));
 

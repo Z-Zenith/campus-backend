@@ -5,13 +5,13 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace BackendApi.Controllers;
 
-// SEK-01: the Coding app's backend — a thin proxy to the self-hosted Code Execution
-// Service (Judge0). Runs a multi-file project's entry point (plus any additional files
-// flattened alongside it, see Judge0Client) and returns stdout/stderr/exit code.
+// SEK-01: the Coding app's backend — runs a multi-file project's entry point (each file
+// written to its own real relative path, see DockerCodeRunner) and returns
+// stdout/stderr/exit code.
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class CodeExecutionController(IJudge0Client judge0) : ControllerBase
+public class CodeExecutionController(ICodeRunner codeRunner) : ControllerBase
 {
     [HttpPost("code/run")]
     public async Task<ActionResult<CodeRunResultDto>> Run(RunCodeProjectRequest request)
@@ -27,7 +27,7 @@ public class CodeExecutionController(IJudge0Client judge0) : ControllerBase
 
         try
         {
-            var result = await judge0.RunAsync(request.EntryFilePath, request.Files, request.Stdin);
+            var result = await codeRunner.RunAsync(request.EntryFilePath, request.Files, request.Stdin);
             return Ok(result);
         }
         catch (UnsupportedLanguageException ex)

@@ -29,6 +29,27 @@ dotnet test BackendApi.Tests
 
 See `README.md` for local Postgres setup and `MIGRATIONS.md` for schema-change policy.
 
+## SEK-01 code execution (`DockerCodeRunner`)
+
+Each Coding-app Run shells out to `docker run` for a throwaway per-submission
+container — see `Services/DockerCodeRunner.cs`'s doc comment for why this replaced a
+Judge0-backed `Judge0Client` (isolate's cgroup v1 requirement vs. this environment's
+cgroup v2 host). Requires:
+- `docker` on `PATH` and reachable from wherever this process runs (true for a bare
+  `dotnet run`; a containerized `backend-api` would need the host's Docker socket
+  bind-mounted in — a real security tradeoff, not currently wired up, see the doc
+  comment).
+- The base images in `DockerCodeRunner.Languages` pulled at least once (`python:3.12-slim`,
+  `gcc:13`, `eclipse-temurin:21-jdk`, `node:20-slim`, `mcr.microsoft.com/dotnet/sdk:8.0`,
+  `keinos/sqlite3:latest`) — first Run pays the pull cost otherwise.
+- `campus-ts-runner:local` built once (typescript needs to be pre-installed since
+  submissions run with `--network none`): `docker build -t campus-ts-runner:local -f
+  docker/ts-runner.Dockerfile .`
+
+`campus-platform/docker-compose.yml`'s `judge0-*` services are no longer in this
+execution path — left in place rather than removed as part of this change, since
+nothing here depends on deleting them.
+
 ## Code conventions
 
 Match the surrounding code's style and controller/service folder layout. Feature IDs referenced

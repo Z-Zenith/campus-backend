@@ -2338,6 +2338,35 @@
         }
       }
     },
+    "/api/v1/me/capabilities": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeCapabilitiesResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeCapabilitiesResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeCapabilitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/messages/threads": {
       "post": {
         "tags": [
@@ -4188,6 +4217,53 @@
         "responses": {
           "200": {
             "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/users/search": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserSearchResultDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserSearchResultDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserSearchResultDto"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -6060,6 +6136,20 @@
           }
         }
       },
+      "MeCapabilitiesResponse": {
+        "required": [
+          "permissions"
+        ],
+        "type": "object",
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "MessageResponse": {
         "required": [
           "id",
@@ -7666,6 +7756,26 @@
           }
         }
       },
+      "UserSearchResultDto": {
+        "required": [
+          "id",
+          "fullName",
+          "identifier"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "identifier": {
+            "type": "string"
+          }
+        }
+      },
       "WardFeeDto": {
         "required": [
           "id",
@@ -7838,6 +7948,9 @@
     },
     {
       "name": "Marks"
+    },
+    {
+      "name": "Me"
     },
     {
       "name": "Messaging"

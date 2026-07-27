@@ -14,6 +14,12 @@ public record CreateUserResponse(Guid UserId, string TotpProvisioningUri, string
 
 public record ResetPasswordRequest(string NewPassword);
 
+// GET /users/search — deliberately minimal (no account type, no department, no
+// sensitive fields): just enough for an admin to pick the right person by name/
+// identifier before an action like reset-password/assign-HoD/role-binding, which each
+// re-check their own specific permission independently at the point of the write.
+public record UserSearchResultDto(Guid Id, string FullName, string Identifier);
+
 // AWA-07 — a teacher-submitted remark. TeacherName is resolved via the FK join
 // regardless of whether that teacher is still active (see acceptance criterion:
 // "record includes remarks... even if the submitting teacher is no longer active").

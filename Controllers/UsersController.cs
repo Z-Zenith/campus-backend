@@ -218,6 +218,47 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         return NoContent();
     }
 
+    // Read-only, additive: lets admin-web resolve a name/identifier to a userId before an
+    // action (assign-HoD, reset-password, role-binding, fee lookup), instead of requiring
+    // an admin to paste a raw GUID. Gated on holding at least one admin-capability
+    // permission (the same set GET /me/capabilities reports) rather than a bare
+    // [Authorize] — a loosely-gated search here would let ANY authenticated token,
+    // including students/teachers, enumerate every user in the college by name, which is
+    // a real privacy hole this endpoint must not introduce. Each caller's specific write
+    // action (e.g. reset_password) still re-checks its own permission independently —
+    // this endpoint only has to confirm the caller is admin-capable at all.
+    [HttpGet("search")]
+    public async Task<ActionResult<List<UserSearchResultDto>>> Search([FromQuery] string q)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var callerCapabilities = await permissions.GetEffectivePermissionsAsync(caller.Id, AdminCapabilityPermissions.Codes);
+        if (callerCapabilities.Count == 0)
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Ok(new List<UserSearchResultDto>());
+        }
+
+        var needle = q.ToLower();
+        var matches = await db.Users
+            .Where(u => u.CollegeId == caller.CollegeId)
+            .Where(u => u.FullName.ToLower().Contains(needle) || u.Identifier.ToLower().Contains(needle))
+            .OrderBy(u => u.FullName)
+            .Take(20)
+            .Select(u => new UserSearchResultDto(u.Id, u.FullName, u.Identifier))
+            .ToListAsync();
+
+        return Ok(matches);
+    }
+
     private async Task<User?> CurrentUserAsync()
     {
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);

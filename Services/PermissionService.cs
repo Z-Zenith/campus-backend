@@ -40,4 +40,17 @@ public class PermissionService(AppDbContext db) : IPermissionService
 
         return hodBinding?.DepartmentId;
     }
+
+    public async Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes)
+    {
+        var held = new List<string>();
+        foreach (var code in candidateCodes)
+        {
+            if (await HasPermissionAsync(userId, code))
+            {
+                held.Add(code);
+            }
+        }
+        return held;
+    }
 }

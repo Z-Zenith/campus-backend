@@ -18,6 +18,7 @@ public class CalendarControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(true);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes) => Task.FromResult(candidateCodes.ToList());
     }
 
     private static AppDbContext NewDb() => new(
@@ -128,6 +129,7 @@ public class CalendarControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes) => Task.FromResult(new List<string>());
     }
 
     // #94: simulates the exact race CalendarController.RegisterForEvent must survive — two

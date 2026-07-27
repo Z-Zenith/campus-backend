@@ -21,6 +21,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes) => Task.FromResult(new List<string>());
     }
 
     // #159: Generate() gates on "create_timetable" — a variant of the fake above that
@@ -29,6 +30,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes) => Task.FromResult(candidateCodes.Where(c => c == "create_timetable").ToList());
     }
 
     // #159: records LogWarning calls so tests can assert Generate() surfaces skipped
@@ -687,6 +689,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<List<string>> GetEffectivePermissionsAsync(Guid userId, IEnumerable<string> candidateCodes) => Task.FromResult(candidateCodes.Where(c => c == "create_timetable").ToList());
     }
 
     private static TimetableController GlobalCallerController(AppDbContext db, User caller)

@@ -4,3 +4,8 @@
 # lookup on Linux. Force LF on checkout regardless of a contributor's
 # core.autocrlf setting.
 db/init/*.sh text eol=lf
+# Shell scripts run inside Linux containers (Postgres docker-entrypoint-initdb.d) — a
+# CRLF checkout (e.g. Windows with core.autocrlf=true) corrupts `set -e` and other
+# lines enough that the script silently no-ops instead of erroring loudly, so this
+# must stay LF regardless of the checkout platform.
+*.sh text eol=lf

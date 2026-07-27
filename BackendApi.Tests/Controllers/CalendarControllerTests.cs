@@ -258,4 +258,61 @@ public class CalendarControllerTests
         Assert.IsType<OkObjectResult>(result.Result);
         Assert.Single(await db.EventRegistrations.ToListAsync());
     }
+
+    // SDA-14: personal to-do CRUD — student-owned, no permission check beyond "it's mine".
+    [Fact]
+    public async Task CreateTodo_ThenSetComplete_ThenDelete_RoundTrips()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var created = await controller.CreateTodo(new CreateTodoRequest("Finish lab report", DateTime.UtcNow.AddDays(2)));
+        var todo = Assert.IsType<TodoDto>(Assert.IsType<OkObjectResult>(created.Result).Value);
+        Assert.False(todo.Completed);
+
+        var completed = await controller.SetTodoComplete(todo.Id, new SetTodoCompleteRequest(true));
+        var updated = Assert.IsType<TodoDto>(Assert.IsType<OkObjectResult>(completed.Result).Value);
+        Assert.True(updated.Completed);
+
+        var deleted = await controller.DeleteTodo(todo.Id);
+        Assert.IsType<NoContentResult>(deleted);
+        Assert.Empty(await db.Todos.ToListAsync());
+    }
+
+    [Fact]
+    public async Task SetTodoComplete_ReturnsNotFound_ForAnotherStudentsTodo()
+    {
+        await using var db = NewDb();
+        var owner = NewUser(AccountType.Student);
+        var otherStudent = NewUser(AccountType.Student);
+        db.Users.AddRange(owner, otherStudent);
+        var todo = new Todo { Id = Guid.NewGuid(), StudentId = owner.Id, Title = "Owner's todo", Completed = false };
+        db.Todos.Add(todo);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherStudent);
+        var result = await controller.SetTodoComplete(todo.Id, new SetTodoCompleteRequest(true));
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateCustomEntry_ThenDelete_RoundTrips()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var created = await controller.CreateCustomEntry(new CreateCustomCalendarEntryRequest("Study group", DateOnly.FromDateTime(DateTime.UtcNow.AddDays(3))));
+        var entry = Assert.IsType<CustomCalendarEntryDto>(Assert.IsType<OkObjectResult>(created.Result).Value);
+
+        var deleted = await controller.DeleteCustomEntry(entry.Id);
+        Assert.IsType<NoContentResult>(deleted);
+        Assert.Empty(await db.CustomCalendarEntries.ToListAsync());
+    }
 }

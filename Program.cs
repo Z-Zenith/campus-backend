@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
 using BackendApi.Hubs;
@@ -19,7 +20,28 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers(options => options.Filters.Add<SessionActiveFilter>())
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options =>
+{
+    // The global JsonStringEnumConverter registered on the MVC pipeline above (line ~20)
+    // is NOT visible to the OpenAPI document generator's own JsonSerializerOptions, so it
+    // emits every enum as `type: integer`. The live API actually serializes enums as their
+    // PascalCase member-name strings (JsonStringEnumConverter default), so the generated
+    // snapshot must reflect that or a generated client would break on every enum.
+    // Rewrite each enum schema to `type: string` with the member names as `enum` values.
+    options.AddSchemaTransformer((schema, context, cancellationToken) =>
+    {
+        var clrType = context.JsonTypeInfo.Type;
+        if (clrType.IsEnum)
+        {
+            schema.Type = Microsoft.OpenApi.JsonSchemaType.String;
+            schema.Format = null; // drop the stale "int32" format from the integer schema
+            schema.Enum = Enum.GetNames(clrType)
+                .Select(name => (JsonNode)JsonValue.Create(name))
+                .ToList();
+        }
+        return Task.CompletedTask;
+    });
+});
 
 var connectionString = builder.Configuration.GetConnectionString("Campus")
     ?? throw new InvalidOperationException("Missing ConnectionStrings:Campus configuration.");
@@ -100,6 +122,16 @@ builder.Services.AddHttpClient<IAiServicesClient, AiServicesClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["AiServices:BaseUrl"] ?? "http://ai-services:8000");
 });
 
+// SEK-01: self-hosted Code Execution Service (Judge0 — see campus-platform's
+// judge0-server, loopback-only, reached over the compose network in production/docker
+// deployments). Defaults to the compose service name/port, same fallback pattern as
+// AiServices:BaseUrl above.
+builder.Services.AddHttpClient<IJudge0Client, Judge0Client>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Judge0:BaseUrl"] ?? "http://judge0-server:2358");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 // AIS-02: Copyleaks — external, credentialed (Copyleaks:Email/ApiKey/WebhookSecret).
 // No default base URL fallback: an empty ApiKey/Email already fails closed inside
 // CopyleaksClient via ExternalServiceNotConfiguredException, so there's no safe
@@ -143,6 +175,17 @@ if (string.IsNullOrWhiteSpace(jwtKey))
         builder.Environment.IsDevelopment()
             ? "Missing Jwt:Key configuration. Set it in appsettings.Development.json (untracked/local) or the JWT__Key environment variable."
             : "Missing Jwt:Key configuration. Set the JWT__Key environment variable before starting in a non-Development environment.");
+}
+// Same fail-fast shape as the connection-string dev-placeholder guard above (#137): the
+// committed appsettings.Development.json ships a well-known dev-only signing key. A build
+// deployed with ASPNETCORE_ENVIRONMENT unset/mis-set could otherwise start up signing and
+// validating tokens with this public value, letting anyone forge a valid JWT for any user.
+const string DevJwtKeyPlaceholder = "dev-only-signing-key-change-me-before-any-real-deployment-32b";
+if (!builder.Environment.IsDevelopment() && jwtKey == DevJwtKeyPlaceholder)
+{
+    throw new InvalidOperationException(
+        "Jwt:Key is still the committed dev-only placeholder from appsettings.Development.json. " +
+        "Set the JWT__Key environment variable to a real secret before starting in a non-Development environment.");
 }
 
 builder.Services

@@ -23,6 +23,18 @@ public record AssignmentDto(
     DateTime SubmissionWindowEnd,
     string? TypeSpecificSettings);
 
+// SDA-10: one row per assignment for the signed-in student's own tile grid — folds in
+// the student's own submission status (if any) so the client doesn't need a second
+// round-trip per tile to know whether/late it's already been submitted.
+public record AssignmentSummaryDto(
+    Guid Id,
+    string Title,
+    string SubjectName,
+    string Type,
+    DateTime DueDate,
+    DateTime? SubmittedAt,
+    bool? IsLate);
+
 public record SubmitAssignmentRequest(string ContentUrl, AssignmentType SubmissionFormat);
 
 public record SubmissionDto(

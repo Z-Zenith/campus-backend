@@ -6,24 +6,28 @@ using Microsoft.AspNetCore.Mvc;
 namespace BackendApi.Controllers;
 
 // SEK-01: the Coding app's backend — a thin proxy to the self-hosted Code Execution
-// Service (Judge0). No persistence yet (see Judge0Client's own remarks); this just runs
-// the given source and returns stdout/stderr/exit code.
+// Service (Judge0). Runs a multi-file project's entry point (plus any additional files
+// flattened alongside it, see Judge0Client) and returns stdout/stderr/exit code.
 [ApiController]
 [Route("api/v1")]
 [Authorize]
 public class CodeExecutionController(IJudge0Client judge0) : ControllerBase
 {
     [HttpPost("code/run")]
-    public async Task<ActionResult<CodeRunResultDto>> Run(RunCodeRequest request)
+    public async Task<ActionResult<CodeRunResultDto>> Run(RunCodeProjectRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Content))
+        if (request.Files.Count == 0)
         {
-            return BadRequest(new { error = "content_required", message = "Source must not be empty." });
+            return BadRequest(new { error = "validation_error", message = "A project must have at least one file." });
+        }
+        if (!request.Files.Any(f => f.Path == request.EntryFilePath))
+        {
+            return BadRequest(new { error = "validation_error", message = $"Entry file '{request.EntryFilePath}' is not one of the project's files." });
         }
 
         try
         {
-            var result = await judge0.RunAsync(request.Language, request.Content, request.Stdin);
+            var result = await judge0.RunAsync(request.EntryFilePath, request.Files, request.Stdin);
             return Ok(result);
         }
         catch (UnsupportedLanguageException ex)

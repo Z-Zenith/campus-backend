@@ -7,20 +7,21 @@ namespace BackendApi.Tests.Fakes;
 // so controller tests configure canned behavior here instead.
 public class FakeJudge0Client : IJudge0Client
 {
-    public string? LastLanguage { get; private set; }
-    public string? LastContent { get; private set; }
+    public string? LastEntryFilePath { get; private set; }
+    public IReadOnlyList<CodeFileDto>? LastFiles { get; private set; }
     public string? LastStdin { get; private set; }
-    public CodeRunResultDto Result { get; set; } = new("", "", 0, 10, false);
+    public CodeRunResultDto Result { get; set; } = new("", "", 0, 10, false, "accepted");
     public Exception? ThrowOnRun { get; set; }
 
-    public Task<CodeRunResultDto> RunAsync(string language, string content, string? stdin, CancellationToken ct = default)
+    public Task<CodeRunResultDto> RunAsync(
+        string entryFilePath, IReadOnlyList<CodeFileDto> files, string? stdin, CancellationToken ct = default)
     {
         if (ThrowOnRun is not null)
         {
             throw ThrowOnRun;
         }
-        LastLanguage = language;
-        LastContent = content;
+        LastEntryFilePath = entryFilePath;
+        LastFiles = files;
         LastStdin = stdin;
         return Task.FromResult(Result);
     }

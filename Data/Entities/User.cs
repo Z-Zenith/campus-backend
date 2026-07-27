@@ -59,6 +59,9 @@ public partial class User
     [InverseProperty("ActualTeacher")]
     public virtual ICollection<ClassSession> ClassSessions { get; set; } = new List<ClassSession>();
 
+    [InverseProperty("Owner")]
+    public virtual ICollection<CodeProject> CodeProjects { get; set; } = new List<CodeProject>();
+
     [ForeignKey("CollegeId")]
     [InverseProperty("Users")]
     public virtual College College { get; set; } = null!;

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -20,7 +21,7 @@ public class UnsupportedLanguageException(string language) : Exception($"'{langu
 // instead of hanging indefinitely if the queue is backed up.
 public interface IJudge0Client
 {
-    Task<CodeRunResultDto> RunAsync(string language, string content, string? stdin, CancellationToken ct = default);
+    Task<CodeRunResultDto> RunAsync(string entryFilePath, IReadOnlyList<CodeFileDto> files, string? stdin, CancellationToken ct = default);
 }
 
 public class Judge0Client(HttpClient http, IConfiguration configuration) : IJudge0Client
@@ -56,12 +57,25 @@ public class Judge0Client(HttpClient http, IConfiguration configuration) : IJudg
     private sealed record StatusInfo(int Id, string Description);
     private sealed record SubmissionResponse(string? Stdout, string? Stderr, string? CompileOutput, StatusInfo? Status);
 
-    public async Task<CodeRunResultDto> RunAsync(string language, string content, string? stdin, CancellationToken ct = default)
+    public async Task<CodeRunResultDto> RunAsync(
+        string entryFilePath, IReadOnlyList<CodeFileDto> files, string? stdin, CancellationToken ct = default)
     {
-        if (!LanguageIds.TryGetValue(language, out var languageId))
+        var entryFile = files.FirstOrDefault(f => f.Path == entryFilePath)
+            ?? throw new InvalidOperationException($"Entry file '{entryFilePath}' is not one of the submitted files.");
+
+        // Defense in depth: SEK's validateProject already rejects an unsupported language
+        // client-side, but every file's language is re-validated here too since this is the
+        // layer that actually owns the Language -> Judge0 mapping.
+        foreach (var file in files)
         {
-            throw new UnsupportedLanguageException(language);
+            if (!LanguageIds.ContainsKey(file.Language))
+            {
+                throw new UnsupportedLanguageException(file.Language);
+            }
         }
+
+        var languageId = LanguageIds[entryFile.Language];
+        var additionalFilesZip = BuildAdditionalFilesZip(files.Where(f => f.Path != entryFilePath).ToList());
 
         var authHeader = configuration["Judge0:AuthHeader"] ?? "X-Judge0-Auth";
         var authToken = configuration["Judge0:AuthToken"];
@@ -70,9 +84,10 @@ public class Judge0Client(HttpClient http, IConfiguration configuration) : IJudg
         {
             Content = JsonContent.Create(new
             {
-                source_code = ToBase64(content),
+                source_code = ToBase64(entryFile.Content),
                 language_id = languageId,
                 stdin = stdin is null ? null : ToBase64(stdin),
+                additional_files = additionalFilesZip,
             }),
         };
         AddAuth(submitRequest, authHeader, authToken);
@@ -107,17 +122,75 @@ public class Judge0Client(HttpClient http, IConfiguration configuration) : IJudg
                 }
 
                 return new CodeRunResultDto(stdout, stderr, statusId == 3 ? 0 : 1,
-                    (long)stopwatch.Elapsed.TotalMilliseconds, TimedOut: statusId == 5);
+                    (long)stopwatch.Elapsed.TotalMilliseconds, TimedOut: statusId == 5, Status: MapStatus(statusId));
             }
 
             if (stopwatch.Elapsed >= PollTimeout)
             {
                 return new CodeRunResultDto("", "The Code Execution Service did not finish in time.",
-                    ExitCode: 1, (long)stopwatch.Elapsed.TotalMilliseconds, TimedOut: true);
+                    ExitCode: 1, (long)stopwatch.Elapsed.TotalMilliseconds, TimedOut: true, Status: "time_limit_exceeded");
             }
 
             await Task.Delay(PollInterval, ct);
         }
+    }
+
+    // Coarsens Judge0's own status id into the four buckets CodeRunResult.status
+    // distinguishes for the Problems panel (see campus-shared-editor-kit's types.ts).
+    // Anything outside the known ids maps to null (unknown), not a guess.
+    private static string? MapStatus(int statusId) => statusId switch
+    {
+        3 => "accepted",
+        5 => "time_limit_exceeded",
+        6 => "compilation_error",
+        >= 7 and <= 12 => "runtime_error",
+        13 or 14 => "internal_error",
+        _ => null,
+    };
+
+    // Zips every non-entry file for Judge0's `additional_files` field (a base64 zip Judge0
+    // extracts alongside source_code before compiling/running). Judge0 extracts into one
+    // flat sandbox directory — it has no concept of a nested folder tree at run time — so
+    // every path is flattened to its basename before zipping. This means cross-file
+    // references only work when a language's toolchain auto-discovers same-directory files
+    // by name (C/C++ #include, Java sibling classes), not package-relative imports (e.g.
+    // Python "from pkg.sub import x" won't resolve once "pkg/sub.py" is flattened to
+    // "sub.py"). A real, permanent constraint of reusing Judge0 CE unmodified — not
+    // something to "fix" here. Returns null when there are no additional files, so the
+    // submission body omits the field entirely rather than sending an empty zip.
+    public static string? BuildAdditionalFilesZip(IReadOnlyList<CodeFileDto> nonEntryFiles)
+    {
+        if (nonEntryFiles.Count == 0)
+        {
+            return null;
+        }
+
+        using var zipStream = new MemoryStream();
+        using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var usedNames = new HashSet<string>();
+            foreach (var file in nonEntryFiles)
+            {
+                var basename = Path.GetFileName(file.Path);
+                // Two files with different folders but the same basename would otherwise
+                // silently collide once flattened — disambiguate deterministically rather
+                // than letting the second entry overwrite the first inside the zip.
+                var entryName = basename;
+                var suffix = 1;
+                while (!usedNames.Add(entryName))
+                {
+                    entryName = $"{Path.GetFileNameWithoutExtension(basename)}_{suffix}{Path.GetExtension(basename)}";
+                    suffix++;
+                }
+
+                var entry = archive.CreateEntry(entryName);
+                using var entryStream = entry.Open();
+                using var writer = new StreamWriter(entryStream, Encoding.UTF8);
+                writer.Write(file.Content);
+            }
+        }
+
+        return Convert.ToBase64String(zipStream.ToArray());
     }
 
     private static void AddAuth(HttpRequestMessage request, string authHeader, string? authToken)

@@ -10,8 +10,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Controllers;
 
-// Track 2 surface (assignments, AI services) — stubbed here only to keep the shared
-// API contract complete; implementation belongs to Track 2.
+// Track 2 surface (assignments, AI services).
 [ApiController]
 [Route("api/v1")]
 [Authorize]
@@ -88,6 +87,54 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         await db.SaveChangesAsync();
 
         return Ok(ToDto(assignment));
+    }
+
+    // SDA-10: assignment tile grid — one row per assignment for a subject taught to the
+    // student's own section, with the student's own submission (if any) folded in so the
+    // client can show a status badge per tile without a second call.
+    [HttpGet("assignments/mine")]
+    public async Task<ActionResult<List<AssignmentSummaryDto>>> Mine()
+    {
+        var userId = CurrentUserId();
+        var student = await db.Users.FindAsync(userId);
+        if (student is null || student.AccountType != AccountType.Student)
+        {
+            return Forbid();
+        }
+
+        var sectionId = await db.SectionEnrollments
+            .Where(e => e.StudentId == userId)
+            .Select(e => (Guid?)e.SectionId)
+            .FirstOrDefaultAsync();
+        if (sectionId is null)
+        {
+            return Ok(new List<AssignmentSummaryDto>());
+        }
+
+        var subjectIds = await db.TeacherSectionAssignments
+            .Where(a => a.SectionId == sectionId)
+            .Select(a => a.SubjectId)
+            .Distinct()
+            .ToListAsync();
+
+        var assignments = await db.Assignments
+            .Where(a => subjectIds.Contains(a.SubjectId))
+            .Include(a => a.Subject)
+            .ToListAsync();
+
+        var assignmentIds = assignments.Select(a => a.Id).ToList();
+        var mySubmissions = await db.Submissions
+            .Where(s => s.StudentId == userId && assignmentIds.Contains(s.AssignmentId))
+            .ToListAsync();
+
+        var summaries = assignments.Select(a =>
+        {
+            var submission = mySubmissions.FirstOrDefault(s => s.AssignmentId == a.Id);
+            return new AssignmentSummaryDto(a.Id, a.Title, a.Subject.Name, a.Type.ToString(),
+                a.DueDate, submission?.SubmittedAt, submission is null ? null : submission.IsLate);
+        }).OrderBy(d => d.DueDate).ToList();
+
+        return Ok(summaries);
     }
 
     // SDA-10. SDA-11 (auto-submit on exit) is Track 1 — a different trigger path

@@ -417,16 +417,20 @@ public class CommunityControllerTests
         Assert.IsType<ForbidResult>(result.Result);
     }
 
+    // AWA-06 within the caller's college: every group in the college is returned regardless
+    // of who created it or whether the caller is a member. Updated from the prior version
+    // that seeded both groups in *different random colleges* (neither the admin's) and
+    // asserted both came back — that encoded the #126 cross-college IDOR this fix closes.
     [Fact]
-    public async Task Awa06_AllGroups_ReturnsEveryGroupRegardlessOfMembershipOrCollege()
+    public async Task Awa06_AllGroups_ReturnsEveryGroupInCallersCollege_RegardlessOfMembership()
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
         db.Users.Add(admin);
         db.PermissionGrants.Add(GrantViewAllGroups(admin.Id));
         db.Groups.AddRange(
-            new Group { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Group A", Type = GroupType.Club, CreatedBy = Guid.NewGuid() },
-            new Group { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Group B", Type = GroupType.SubjectSection, CreatedBy = Guid.NewGuid() });
+            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Group A", Type = GroupType.Club, CreatedBy = Guid.NewGuid() },
+            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Group B", Type = GroupType.SubjectSection, CreatedBy = Guid.NewGuid() });
         await db.SaveChangesAsync();
 
         var controller = ControllerAs(db, admin);
@@ -435,6 +439,29 @@ public class CommunityControllerTests
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var response = Assert.IsType<MyGroupsResponse>(ok.Value);
         Assert.Equal(2, response.Groups.Count);
+    }
+
+    // #126 (fix: enforce college scope on groups) — a view_all_groups holder must only see
+    // their own college's groups, never another college's.
+    [Fact]
+    public async Task Awa06_AllGroups_ExcludesGroupsFromOtherColleges()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(GrantViewAllGroups(admin.Id));
+        db.Groups.AddRange(
+            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Mine", Type = GroupType.Club, CreatedBy = Guid.NewGuid() },
+            new Group { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Other College", Type = GroupType.Club, CreatedBy = Guid.NewGuid() });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.AllGroups();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<MyGroupsResponse>(ok.Value);
+        var group = Assert.Single(response.Groups);
+        Assert.Equal("Mine", group.Name);
     }
 
     // TWA-05, SDA-16: "view and post in groups they belong to" — the view half.

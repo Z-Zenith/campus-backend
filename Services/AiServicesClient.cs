@@ -1,4 +1,7 @@
+using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BackendApi.Services;
 
@@ -14,7 +17,19 @@ public record SuspiciousFlagResult(string StudentId, string? ClassSessionId, str
 
 public record BrowsingVisitInput(string Url, DateTime VisitedAt, int? DurationSeconds);
 
-// AIS-01/03/04/07: thin HTTP client for the self-hosted AI Services container
+// AIS-06: extracted fields from a syllabus PDF, straight off campus-ai-services'
+// POST /api/v1/syllabus-extraction response. Every field but confidence_notes is nullable
+// because the extractor may not confidently find them; confidence_notes is always an array
+// (possibly empty) explaining which fields it couldn't confidently find.
+public record SyllabusExtractionResult(
+    string? CourseCode, string? CourseName, string? InstructorName, double? Credits, IReadOnlyList<string> ConfidenceNotes);
+
+// AIS-06: thrown when campus-ai-services rejects the PDF as malformed/undecodable (HTTP 400
+// per its locked contract). Lets the controller respond with its own 400 rather than letting
+// EnsureSuccessStatusCode's generic HttpRequestException bubble up as a 500.
+public class SyllabusExtractionInvalidPdfException : Exception;
+
+// AIS-01/03/04/06/07: thin HTTP client for the self-hosted AI Services container
 // (services/ai-services — FastAPI, no external credentials). AIS-02/05 (Copyleaks/
 // Pangram) are external-API-only and out of scope — no client credentials are
 // available in this environment.
@@ -30,10 +45,33 @@ public interface IAiServicesClient
         IReadOnlyList<TelemetryEventInput> events, double minConfidence, CancellationToken ct = default);
 
     Task<string> SummarizeBrowsingAsync(IReadOnlyList<BrowsingVisitInput> visits, CancellationToken ct = default);
+
+    // AIS-06: POSTs the raw PDF bytes (base64-encoded, per the locked contract) to
+    // /api/v1/syllabus-extraction and returns the extracted fields. Throws
+    // SyllabusExtractionInvalidPdfException when the PDF is malformed/undecodable (HTTP 400).
+    Task<SyllabusExtractionResult> ExtractSyllabusAsync(byte[] pdfBytes, CancellationToken ct = default);
 }
 
 public class AiServicesClient(HttpClient http) : IAiServicesClient
 {
+    // The ai-services container (Python/FastAPI) serializes and expects snake_case field
+    // names verbatim from its Pydantic schemas (similarity_score, student_id, recorded_at,
+    // max_score, matched_criteria, submission_a_id, event_type, confidence_score, …) with
+    // no alias generator. The default System.Text.Json web options (camelCase out,
+    // case-insensitive in) cannot bridge the underscore, so every call either 422'd
+    // (/suspicious-behaviour, /browsing-summary) or deserialized to 0/null while silently
+    // dropping request fields like max_score (/similarity, /autograde). SnakeCaseLower is
+    // the single casing source of truth for this client; it must be passed EXPLICITLY to
+    // every PostAsJsonAsync/ReadFromJsonAsync — the parameterless overloads ignore it. C#
+    // records stay PascalCase so the same public result types can still be returned to
+    // frontends in camelCase by MVC; the policy is scoped to this client only.
+    public static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private sealed record SimilarityRequestBody(IReadOnlyList<SubmissionItemBody> Submissions, double Threshold);
     private sealed record SubmissionItemBody(string Id, string Content);
     private sealed record SimilarityResponseBody(List<SimilarityMatchResult> Matches);
@@ -43,9 +81,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     {
         var body = new SimilarityRequestBody(
             submissions.Select(s => new SubmissionItemBody(s.Id, s.Content)).ToList(), threshold);
-        var response = await http.PostAsJsonAsync("/api/v1/similarity", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/similarity", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<SimilarityResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<SimilarityResponseBody>(JsonOptions, ct);
         return result?.Matches ?? [];
     }
 
@@ -57,9 +95,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     {
         var body = new AutogradeRequestBody(
             content, rubric.Select(r => new RubricCriterionBody(r.Name, r.Keywords, r.Weight)).ToList(), maxScore);
-        var response = await http.PostAsJsonAsync("/api/v1/autograde", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/autograde", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<AutogradeSuggestionResult>(cancellationToken: ct)
+        return await response.Content.ReadFromJsonAsync<AutogradeSuggestionResult>(JsonOptions, ct)
             ?? throw new InvalidOperationException("AI Services returned an empty autograde response.");
     }
 
@@ -70,9 +108,9 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
         IReadOnlyList<TelemetryEventInput> events, double minConfidence, CancellationToken ct = default)
     {
         var body = new SuspiciousBehaviourRequestBody(events, minConfidence);
-        var response = await http.PostAsJsonAsync("/api/v1/suspicious-behaviour", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/suspicious-behaviour", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<SuspiciousBehaviourResponseBody>(JsonOptions, ct);
         return result?.Flags ?? [];
     }
 
@@ -82,9 +120,36 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     public async Task<string> SummarizeBrowsingAsync(IReadOnlyList<BrowsingVisitInput> visits, CancellationToken ct = default)
     {
         var body = new BrowsingSummaryRequestBody(visits);
-        var response = await http.PostAsJsonAsync("/api/v1/browsing-summary", body, ct);
+        var response = await http.PostAsJsonAsync("/api/v1/browsing-summary", body, JsonOptions, ct);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<BrowsingSummaryResponseBody>(cancellationToken: ct);
+        var result = await response.Content.ReadFromJsonAsync<BrowsingSummaryResponseBody>(JsonOptions, ct);
         return result?.Summary ?? "";
+    }
+
+    // AIS-06's contract is locked to exactly these snake_case field names, so both request
+    // and response bodies use explicit JsonPropertyName attributes rather than relying on
+    // whatever naming policy the caller's JsonSerializerOptions happens to apply.
+    private sealed record SyllabusExtractionRequestBody([property: JsonPropertyName("pdf_base64")] string PdfBase64);
+
+    private sealed record SyllabusExtractionResponseBody(
+        [property: JsonPropertyName("course_code")] string? CourseCode,
+        [property: JsonPropertyName("course_name")] string? CourseName,
+        [property: JsonPropertyName("instructor_name")] string? InstructorName,
+        [property: JsonPropertyName("credits")] double? Credits,
+        [property: JsonPropertyName("confidence_notes")] List<string>? ConfidenceNotes);
+
+    public async Task<SyllabusExtractionResult> ExtractSyllabusAsync(byte[] pdfBytes, CancellationToken ct = default)
+    {
+        var body = new SyllabusExtractionRequestBody(Convert.ToBase64String(pdfBytes));
+        var response = await http.PostAsJsonAsync("/api/v1/syllabus-extraction", body, ct);
+        if (response.StatusCode == HttpStatusCode.BadRequest)
+        {
+            throw new SyllabusExtractionInvalidPdfException();
+        }
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<SyllabusExtractionResponseBody>(cancellationToken: ct)
+            ?? throw new InvalidOperationException("AI Services returned an empty syllabus extraction response.");
+        return new SyllabusExtractionResult(
+            result.CourseCode, result.CourseName, result.InstructorName, result.Credits, result.ConfidenceNotes ?? []);
     }
 }

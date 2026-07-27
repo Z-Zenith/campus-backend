@@ -54,6 +54,44 @@
         }
       }
     },
+    "/api/v1/assignments/mine": {
+      "get": {
+        "tags": [
+          "Assignments"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentSummaryDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentSummaryDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssignmentSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/assignments/{id}/submissions": {
       "post": {
         "tags": [
@@ -975,6 +1013,465 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MyCalendarResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/todos": {
+      "post": {
+        "tags": [
+          "Calendar"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTodoRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTodoRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTodoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/todos/{id}/complete": {
+      "patch": {
+        "tags": [
+          "Calendar"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTodoCompleteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTodoCompleteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTodoCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodoDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/todos/{id}": {
+      "delete": {
+        "tags": [
+          "Calendar"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/calendar/custom-entries": {
+      "post": {
+        "tags": [
+          "Calendar"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomCalendarEntryRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomCalendarEntryRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomCalendarEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomCalendarEntryDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomCalendarEntryDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomCalendarEntryDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calendar/custom-entries/{id}": {
+      "delete": {
+        "tags": [
+          "Calendar"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/code/run": {
+      "post": {
+        "tags": [
+          "CodeExecution"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCodeProjectRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCodeProjectRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCodeProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeRunResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeRunResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeRunResultDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/code/projects/mine": {
+      "get": {
+        "tags": [
+          "CodeProjects"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CodeProjectSummaryDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CodeProjectSummaryDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CodeProjectSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/code/projects/{id}": {
+      "get": {
+        "tags": [
+          "CodeProjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "CodeProjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCodeProjectRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCodeProjectRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCodeProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "CodeProjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/code/projects": {
+      "post": {
+        "tags": [
+          "CodeProjects"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCodeProjectRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCodeProjectRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCodeProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeProjectDto"
                 }
               }
             }
@@ -2913,6 +3410,50 @@
         }
       }
     },
+    "/api/v1/syllabus/extract": {
+      "post": {
+        "tags": [
+          "Syllabus"
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "$ref": "#/components/schemas/IFormFile"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teacher-feedback/my-teachers": {
       "get": {
         "tags": [
@@ -3672,13 +4213,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "secret",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "requestBody": {
@@ -3712,7 +4246,13 @@
   "components": {
     "schemas": {
       "AccountType": {
-        "type": "integer"
+        "enum": [
+          "Student",
+          "Teacher",
+          "AdminTier",
+          "Parent"
+        ],
+        "type": "string"
       },
       "ApproveExternalMarkResponse": {
         "required": [
@@ -3822,8 +4362,58 @@
           }
         }
       },
+      "AssignmentSummaryDto": {
+        "required": [
+          "id",
+          "title",
+          "subjectName",
+          "type",
+          "dueDate",
+          "submittedAt",
+          "isLate"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "dueDate": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "submittedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "isLate": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
       "AssignmentType": {
-        "type": "integer"
+        "enum": [
+          "Code",
+          "Quiz",
+          "Essay",
+          "FileUpload"
+        ],
+        "type": "string"
       },
       "AttendanceAlertDto": {
         "required": [
@@ -4060,6 +4650,138 @@
           }
         }
       },
+      "CodeFileDto": {
+        "required": [
+          "path",
+          "language",
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "CodeProjectDto": {
+        "required": [
+          "id",
+          "name",
+          "files",
+          "entryFilePath",
+          "activeFilePath",
+          "stdin",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          },
+          "entryFilePath": {
+            "type": "string"
+          },
+          "activeFilePath": {
+            "type": "string"
+          },
+          "stdin": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CodeProjectSummaryDto": {
+        "required": [
+          "id",
+          "name",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CodeRunResultDto": {
+        "required": [
+          "stdout",
+          "stderr",
+          "exitCode",
+          "durationMs",
+          "timedOut",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "exitCode": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "durationMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "timedOut": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "ConfirmedGradeDto": {
         "required": [
           "id",
@@ -4193,6 +4915,62 @@
         "properties": {
           "description": {
             "type": "string"
+          }
+        }
+      },
+      "CreateCodeProjectRequest": {
+        "required": [
+          "name",
+          "files",
+          "entryFilePath",
+          "activeFilePath",
+          "stdin"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          },
+          "entryFilePath": {
+            "type": "string"
+          },
+          "activeFilePath": {
+            "type": "string"
+          },
+          "stdin": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "CreateCustomCalendarEntryRequest": {
+        "required": [
+          "title",
+          "entryDate"
+        ],
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "entryDate": {
+            "type": "string",
+            "format": "date"
           }
         }
       },
@@ -4540,6 +5318,25 @@
           }
         }
       },
+      "CreateTodoRequest": {
+        "required": [
+          "title",
+          "dueDate"
+        ],
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "dueDate": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "CreateUserRequest": {
         "required": [
           "collegeId",
@@ -4604,6 +5401,27 @@
         "properties": {
           "url": {
             "type": "string"
+          }
+        }
+      },
+      "CustomCalendarEntryDto": {
+        "required": [
+          "id",
+          "title",
+          "entryDate"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "entryDate": {
+            "type": "string",
+            "format": "date"
           }
         }
       },
@@ -4892,7 +5710,17 @@
         }
       },
       "GroupType": {
-        "type": "integer"
+        "enum": [
+          "Class",
+          "SubjectSection",
+          "Club",
+          "TeacherOnly"
+        ],
+        "type": "string"
+      },
+      "IFormFile": {
+        "type": "string",
+        "format": "binary"
       },
       "InternalMarkDto": {
         "required": [
@@ -5937,8 +6765,37 @@
           }
         }
       },
+      "RunCodeProjectRequest": {
+        "required": [
+          "entryFilePath",
+          "files",
+          "stdin"
+        ],
+        "type": "object",
+        "properties": {
+          "entryFilePath": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          },
+          "stdin": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "ScopeKind": {
-        "type": "integer"
+        "enum": [
+          "Global",
+          "Department"
+        ],
+        "type": "string"
       },
       "SectionFeedbackDto": {
         "required": [
@@ -6076,6 +6933,17 @@
           "collegeId": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "SetTodoCompleteRequest": {
+        "required": [
+          "completed"
+        ],
+        "type": "object",
+        "properties": {
+          "completed": {
+            "type": "boolean"
           }
         }
       },
@@ -6402,6 +7270,51 @@
           }
         }
       },
+      "SyllabusExtractionResponseDto": {
+        "required": [
+          "courseCode",
+          "courseName",
+          "instructorName",
+          "credits",
+          "confidenceNotes"
+        ],
+        "type": "object",
+        "properties": {
+          "courseCode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "courseName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instructorName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "credits": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "confidenceNotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "TeacherFeedbackDto": {
         "required": [
           "id",
@@ -6668,6 +7581,67 @@
           }
         }
       },
+      "TodoDto": {
+        "required": [
+          "id",
+          "title",
+          "dueDate",
+          "completed"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "dueDate": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "completed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UpdateCodeProjectRequest": {
+        "required": [
+          "name",
+          "files",
+          "entryFilePath",
+          "activeFilePath",
+          "stdin"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          },
+          "entryFilePath": {
+            "type": "string"
+          },
+          "activeFilePath": {
+            "type": "string"
+          },
+          "stdin": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "UpdateNoteRequest": {
         "required": [
           "title",
@@ -6851,6 +7825,12 @@
       "name": "Calendar"
     },
     {
+      "name": "CodeExecution"
+    },
+    {
+      "name": "CodeProjects"
+    },
+    {
       "name": "Community"
     },
     {
@@ -6876,6 +7856,9 @@
     },
     {
       "name": "Subjects"
+    },
+    {
+      "name": "Syllabus"
     },
     {
       "name": "TeacherFeedback"

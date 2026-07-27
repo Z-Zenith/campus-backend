@@ -10,6 +10,10 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.9" />
+    <!-- Pinned explicitly: without it, Npgsql.EntityFrameworkCore.PostgreSQL's floor (10.0.4,
+         pulled in transitively via the BackendApi project reference) wins over the 10.0.9 that
+         Design/InMemory need, causing an MSB3277 binary version conflict at build time. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />

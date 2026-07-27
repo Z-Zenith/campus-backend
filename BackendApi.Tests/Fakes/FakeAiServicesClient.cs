@@ -11,6 +11,9 @@ public class FakeAiServicesClient : IAiServicesClient
     public AutogradeSuggestionResult AutogradeResult { get; set; } = new(0, 100, 0, [], []);
     public IReadOnlyList<SuspiciousFlagResult> SuspiciousFlagResults { get; set; } = [];
     public string BrowsingSummaryText { get; set; } = "";
+    public SyllabusExtractionResult SyllabusExtractionResult { get; set; } = new(null, null, null, null, []);
+    public bool ThrowInvalidPdf { get; set; }
+    public byte[]? LastPdfBytes { get; private set; }
 
     public Task<IReadOnlyList<SimilarityMatchResult>> CheckSimilarityAsync(
         IReadOnlyList<(string Id, string Content)> submissions, double threshold, CancellationToken ct = default)
@@ -26,4 +29,14 @@ public class FakeAiServicesClient : IAiServicesClient
 
     public Task<string> SummarizeBrowsingAsync(IReadOnlyList<BrowsingVisitInput> visits, CancellationToken ct = default)
         => Task.FromResult(BrowsingSummaryText);
+
+    public Task<SyllabusExtractionResult> ExtractSyllabusAsync(byte[] pdfBytes, CancellationToken ct = default)
+    {
+        if (ThrowInvalidPdf)
+        {
+            throw new SyllabusExtractionInvalidPdfException();
+        }
+        LastPdfBytes = pdfBytes;
+        return Task.FromResult(SyllabusExtractionResult);
+    }
 }

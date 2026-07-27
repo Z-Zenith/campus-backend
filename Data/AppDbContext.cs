@@ -26,6 +26,10 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<ClassSession> ClassSessions { get; set; }
 
+    public virtual DbSet<CodeFile> CodeFiles { get; set; }
+
+    public virtual DbSet<CodeProject> CodeProjects { get; set; }
+
     public virtual DbSet<College> Colleges { get; set; }
 
     public virtual DbSet<CopyCheckFlag> CopyCheckFlags { get; set; }
@@ -208,6 +212,30 @@ public partial class AppDbContext : DbContext
                 .HasConstraintName("class_sessions_actual_teacher_id_fkey");
 
             entity.HasOne(d => d.TimetableSlot).WithMany(p => p.ClassSessions).HasConstraintName("class_sessions_timetable_slot_id_fkey");
+        });
+
+        modelBuilder.Entity<CodeProject>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("code_projects_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Stdin).HasDefaultValueSql("''::text");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Owner).WithMany(p => p.CodeProjects).HasConstraintName("code_projects_owner_id_fkey");
+        });
+
+        modelBuilder.Entity<CodeFile>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("code_files_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Content).HasDefaultValueSql("''::text");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Project).WithMany(p => p.CodeFiles).HasConstraintName("code_files_project_id_fkey");
         });
 
         modelBuilder.Entity<College>(entity =>

@@ -34,10 +34,7 @@ public class AssignmentsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Copyleaks:WebhookSecret"] = "test-secret" })
-            .Build();
-        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient(), configuration)
+        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -140,6 +137,65 @@ public class AssignmentsControllerTests
         Assert.False(dto.IsAutosubmitted);
     }
 
+    [Fact]
+    public async Task Mine_ReturnsAssignmentsForTheStudentsOwnSection_WithSubmissionStatus()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, student);
+        var (subject, assignment) = SeedAssignment(db, teacher, student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var submitted = await controller.Submit(assignment.Id, new SubmitAssignmentRequest("https://example.com/a.pdf", AssignmentType.FileUpload));
+        Assert.IsType<OkObjectResult>(submitted.Result);
+
+        var result = await controller.Mine();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var summaries = Assert.IsType<List<AssignmentSummaryDto>>(ok.Value);
+        var summary = Assert.Single(summaries);
+        Assert.Equal(assignment.Id, summary.Id);
+        Assert.Equal(subject.Name, summary.SubjectName);
+        Assert.NotNull(summary.SubmittedAt);
+        Assert.False(summary.IsLate);
+    }
+
+    [Fact]
+    public async Task Mine_ExcludesAssignmentsForSubjectsNotTaughtToTheStudentsSection()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(teacher, student);
+        // A second, unrelated assignment for a subject/section the student isn't enrolled in.
+        var otherTeacher = NewUser(AccountType.Teacher);
+        var otherSubject = new Subject { Id = Guid.NewGuid(), DepartmentId = Guid.NewGuid(), Code = "MA101", Name = "Calculus", TeacherId = otherTeacher.Id };
+        var otherAssignment = new Assignment
+        {
+            Id = Guid.NewGuid(),
+            SubjectId = otherSubject.Id,
+            TeacherId = otherTeacher.Id,
+            Title = "Unrelated",
+            Type = AssignmentType.Essay,
+            DueDate = DateTime.UtcNow.AddDays(1),
+            SubmissionWindowStart = DateTime.UtcNow.AddHours(-1),
+            SubmissionWindowEnd = DateTime.UtcNow.AddHours(1),
+        };
+        db.Users.Add(otherTeacher);
+        db.Subjects.Add(otherSubject);
+        db.Assignments.Add(otherAssignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.Mine();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var summaries = Assert.IsType<List<AssignmentSummaryDto>>(ok.Value);
+        Assert.Empty(summaries);
+    }
+
     private sealed record Fixture(Guid TeacherId, Guid StudentId, Guid OtherStudentId, Guid SubjectId, Guid SectionId, Guid AssignmentId);
 
     // #135: an assignment's subject is taught to a section via TeacherSectionAssignments,
@@ -188,7 +244,7 @@ public class AssignmentsControllerTests
     }
 
     private static AssignmentsController ControllerAs(AppDbContext db, Guid userId) =>
-        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient(), new ConfigurationBuilder().Build())
+        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient())
         {
             ControllerContext = new ControllerContext
             {
@@ -379,7 +435,10 @@ public class AssignmentsControllerTests
         Assert.Equal("pending", accepted.Status);
         Assert.Equal(submission.Id.ToString("N"), fakeCopyleaks.LastScanId);
         Assert.Equal("an essay", fakeCopyleaks.LastContent);
-        Assert.Contains("secret=test-secret", fakeCopyleaks.LastWebhookUrlTemplate);
+        // The shared secret must NOT ride in the webhook URL (it would leak into access/proxy
+        // logs); it now travels in properties.developerPayload in the submit body instead.
+        Assert.DoesNotContain("secret", fakeCopyleaks.LastWebhookUrlTemplate!);
+        Assert.Contains(submission.Id.ToString("N"), fakeCopyleaks.LastWebhookUrlTemplate!);
     }
 
     [Fact]

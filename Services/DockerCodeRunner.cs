@@ -35,7 +35,8 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         string Image,
         Func<string, string>? Compile,
         Func<string, string> Run,
-        int RunTimeoutSeconds = 10);
+        int RunTimeoutSeconds = 10,
+        int CompileTimeoutSeconds = 15);
 
     private static readonly Dictionary<string, LanguageSpec> Languages = new()
     {
@@ -74,6 +75,29 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             Run: entry => $"cp {Quote(entry)} /tmp/__entry.cs && dotnet new console -o . --force >/dev/null 2>&1 && cp /tmp/__entry.cs Program.cs && dotnet run",
             RunTimeoutSeconds: 30),
         ["sql"] = new("keinos/sqlite3:latest", Compile: null, Run: entry => $"sqlite3 :memory: < {Quote(entry)}"),
+        ["go"] = new("golang:1.22-alpine", Compile: null, Run: entry => $"go run {Quote(entry)}"),
+        ["rust"] = new("rust:1-slim",
+            Compile: entry => $"rustc -O -o {RunFileName} {Quote(entry)}",
+            Run: _ => $"./{RunFileName}",
+            RunTimeoutSeconds: 15),
+        ["ruby"] = new("ruby:3-slim", Compile: null, Run: entry => $"ruby {Quote(entry)}"),
+        ["php"] = new("php:8-cli", Compile: null, Run: entry => $"php {Quote(entry)}"),
+        // Needs kotlinc pre-installed, same rationale as typescript above — see
+        // docker/kotlin-runner.Dockerfile. No separate compile step, same reason as
+        // dotnet above (see its comment) plus one more: `kotlinc -include-runtime`
+        // merging the Kotlin stdlib into the output jar hits a severe Docker-Desktop-
+        // on-Windows bind-mount I/O pathology when the jar is written to the
+        // workspace mount (/box) — confirmed by direct measurement to hang past 120s
+        // there vs. ~3.7s writing to the container's own /tmp. So compile+run both
+        // happen in /tmp, inside one container's lifetime, never touching /box for
+        // the jar. Classified via the "error:" marker kotlinc prints on compile
+        // failures (see ClassifyRunResult), same idea as dotnet's "error CS".
+        ["kotlin"] = new("campus-kotlin-runner:local",
+            Compile: null,
+            Run: entry => $"cp {Quote(entry)} /tmp/main.kt && kotlinc /tmp/main.kt -include-runtime -d /tmp/{RunFileName}.jar && java -jar /tmp/{RunFileName}.jar",
+            RunTimeoutSeconds: 30,
+            CompileTimeoutSeconds: 45),
+        ["shell"] = new("bash:5", Compile: null, Run: entry => $"bash {Quote(entry)}"),
     };
 
     public async Task<CodeRunResultDto> RunAsync(
@@ -111,7 +135,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
 
             if (spec.Compile is not null)
             {
-                var compileResult = await RunContainerAsync(spec.Image, workDir, spec.Compile(entryFilePath), stdin: null, timeoutSeconds: 15, ct);
+                var compileResult = await RunContainerAsync(spec.Image, workDir, spec.Compile(entryFilePath), stdin: null, spec.CompileTimeoutSeconds, ct);
                 if (compileResult.ExitCode != 0 || compileResult.TimedOut)
                 {
                     return new CodeRunResultDto("", compileResult.Stderr, compileResult.ExitCode,
@@ -149,9 +173,14 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         {
             return "accepted";
         }
-        // dotnet has no separate compile step (see Languages table comment) — distinguish a
-        // build failure from a runtime exception via the compiler's own "error CS..." marker.
+        // dotnet and kotlin have no separate compile step (see Languages table comments) —
+        // distinguish a build failure from a runtime exception via each compiler's own
+        // error marker ("error CS..." / "error:").
         if (language == "dotnet" && spec.Compile is null && result.Stderr.Contains("error CS", StringComparison.Ordinal))
+        {
+            return "compilation_error";
+        }
+        if (language == "kotlin" && spec.Compile is null && result.Stderr.Contains("error:", StringComparison.Ordinal))
         {
             return "compilation_error";
         }

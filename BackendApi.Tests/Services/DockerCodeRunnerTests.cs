@@ -16,6 +16,7 @@ public class DockerCodeRunnerTests
         "c", "cpp", "python", "java", "dotnet",
         "html", "css", "javascript", "typescript", "nodejs",
         "sql", "json", "yaml",
+        "go", "rust", "ruby", "php", "kotlin", "shell",
     ];
 
     [Theory]

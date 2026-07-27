@@ -17,3 +17,15 @@ public record RegisterForEventResponse(Guid EventId, Guid StudentId, DateTime Re
 public record CalendarItemDto(string Kind, Guid Id, string Title, DateTime Start, DateTime End, string? Extra);
 
 public record MyCalendarResponse(List<CalendarItemDto> Items);
+
+// SDA-14: student-personal to-dos and custom calendar entries — student-owned, no
+// permission check beyond "it's mine" (see CalendarController's write endpoints).
+public record CreateTodoRequest(string Title, DateTime? DueDate);
+
+public record TodoDto(Guid Id, string Title, DateTime? DueDate, bool Completed);
+
+public record SetTodoCompleteRequest(bool Completed);
+
+public record CreateCustomCalendarEntryRequest(string Title, DateOnly EntryDate);
+
+public record CustomCalendarEntryDto(Guid Id, string Title, DateOnly EntryDate);

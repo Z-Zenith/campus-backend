@@ -165,6 +165,132 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         return Ok(new MyCalendarResponse(items));
     }
 
+    // SDA-14: personal to-dos — student-owned, no permission check beyond "it's mine".
+    [HttpPost("todos")]
+    public async Task<ActionResult<TodoDto>> CreateTodo(CreateTodoRequest request)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return BadRequest(new { error = "title_required", message = "To-do title must not be empty." });
+        }
+
+        var todo = new Todo
+        {
+            Id = Guid.NewGuid(),
+            StudentId = student.Id,
+            Title = request.Title.Trim(),
+            DueDate = request.DueDate,
+            Completed = false,
+        };
+        db.Todos.Add(todo);
+        await db.SaveChangesAsync();
+
+        return Ok(ToTodoDto(todo));
+    }
+
+    [HttpPatch("todos/{id}/complete")]
+    public async Task<ActionResult<TodoDto>> SetTodoComplete(Guid id, SetTodoCompleteRequest request)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+
+        var todo = await db.Todos.FirstOrDefaultAsync(t => t.Id == id && t.StudentId == student.Id);
+        if (todo is null)
+        {
+            return NotFound();
+        }
+
+        todo.Completed = request.Completed;
+        await db.SaveChangesAsync();
+
+        return Ok(ToTodoDto(todo));
+    }
+
+    [HttpDelete("todos/{id}")]
+    public async Task<IActionResult> DeleteTodo(Guid id)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+
+        var todo = await db.Todos.FirstOrDefaultAsync(t => t.Id == id && t.StudentId == student.Id);
+        if (todo is null)
+        {
+            return NotFound();
+        }
+
+        db.Todos.Remove(todo);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // SDA-14: custom calendar entries — same student-owned model as to-dos above.
+    [HttpPost("calendar/custom-entries")]
+    public async Task<ActionResult<CustomCalendarEntryDto>> CreateCustomEntry(CreateCustomCalendarEntryRequest request)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+        if (string.IsNullOrWhiteSpace(request.Title))
+        {
+            return BadRequest(new { error = "title_required", message = "Custom entry title must not be empty." });
+        }
+
+        var entry = new CustomCalendarEntry
+        {
+            Id = Guid.NewGuid(),
+            StudentId = student.Id,
+            Title = request.Title.Trim(),
+            EntryDate = request.EntryDate,
+        };
+        db.CustomCalendarEntries.Add(entry);
+        await db.SaveChangesAsync();
+
+        return Ok(ToCustomEntryDto(entry));
+    }
+
+    [HttpDelete("calendar/custom-entries/{id}")]
+    public async Task<IActionResult> DeleteCustomEntry(Guid id)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+
+        var entry = await db.CustomCalendarEntries.FirstOrDefaultAsync(c => c.Id == id && c.StudentId == student.Id);
+        if (entry is null)
+        {
+            return NotFound();
+        }
+
+        db.CustomCalendarEntries.Remove(entry);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    private async Task<User?> CurrentStudentAsync()
+    {
+        var student = await db.Users.FindAsync(CurrentUserId());
+        return student is { AccountType: AccountType.Student } ? student : null;
+    }
+
+    private static TodoDto ToTodoDto(Todo t) => new(t.Id, t.Title, t.DueDate, t.Completed);
+
+    private static CustomCalendarEntryDto ToCustomEntryDto(CustomCalendarEntry c) => new(c.Id, c.Title, c.EntryDate);
+
     private async Task<List<CalendarItemDto>> ThisWeeksClassSessionsAsync(Guid sectionId)
     {
         var slots = await db.TimetableSlots

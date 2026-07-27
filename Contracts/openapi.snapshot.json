@@ -2913,6 +2913,50 @@
         }
       }
     },
+    "/api/v1/syllabus/extract": {
+      "post": {
+        "tags": [
+          "Syllabus"
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "$ref": "#/components/schemas/IFormFile"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyllabusExtractionResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teacher-feedback/my-teachers": {
       "get": {
         "tags": [
@@ -4905,6 +4949,10 @@
         ],
         "type": "string"
       },
+      "IFormFile": {
+        "type": "string",
+        "format": "binary"
+      },
       "InternalMarkDto": {
         "required": [
           "subjectId",
@@ -6417,6 +6465,51 @@
           }
         }
       },
+      "SyllabusExtractionResponseDto": {
+        "required": [
+          "courseCode",
+          "courseName",
+          "instructorName",
+          "credits",
+          "confidenceNotes"
+        ],
+        "type": "object",
+        "properties": {
+          "courseCode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "courseName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instructorName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "credits": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "confidenceNotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "TeacherFeedbackDto": {
         "required": [
           "id",
@@ -6891,6 +6984,9 @@
     },
     {
       "name": "Subjects"
+    },
+    {
+      "name": "Syllabus"
     },
     {
       "name": "TeacherFeedback"

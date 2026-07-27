@@ -127,6 +127,13 @@ builder.Services.AddHttpClient<IAiServicesClient, AiServicesClient>(client =>
 // Judge0/isolate). No HttpClient needed, this doesn't talk HTTP.
 builder.Services.AddSingleton<ICodeRunner, DockerCodeRunner>();
 
+// SEK-01: integrated terminal — persistent per-session sandbox container, reaped on an
+// idle timer (see TerminalSessionService's doc comment for scope). Singleton: the
+// in-memory session dictionary must be shared across requests, same reasoning as
+// ParentLoginLockoutService above.
+builder.Services.AddSingleton<TerminalSessionService>();
+builder.Services.AddHostedService<TerminalSessionReaperHostedService>();
+
 // AIS-02: Copyleaks — external, credentialed (Copyleaks:Email/ApiKey/WebhookSecret).
 // No default base URL fallback: an empty ApiKey/Email already fails closed inside
 // CopyleaksClient via ExternalServiceNotConfiguredException, so there's no safe

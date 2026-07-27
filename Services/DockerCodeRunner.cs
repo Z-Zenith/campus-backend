@@ -193,14 +193,17 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         return "runtime_error";
     }
 
-    private static string CreateWorkDir()
+    // internal rather than private: TerminalSessionService reuses these three for the
+    // same "materialize a CodeProject onto disk for a container mount" need, rather than
+    // duplicating them.
+    internal static string CreateWorkDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "campus-coderun-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return dir;
     }
 
-    private static void TryDeleteWorkDir(string workDir)
+    internal static void TryDeleteWorkDir(string workDir)
     {
         try
         {
@@ -219,7 +222,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
     // would on a student's own machine. Rejects path traversal / absolute paths defensively;
     // SEK's own CodeFile.path is embedder-controlled today, but this is the layer that
     // actually touches the host filesystem.
-    private static void WriteFiles(string workDir, IReadOnlyList<CodeFileDto> files)
+    internal static void WriteFiles(string workDir, IReadOnlyList<CodeFileDto> files)
     {
         foreach (var file in files)
         {

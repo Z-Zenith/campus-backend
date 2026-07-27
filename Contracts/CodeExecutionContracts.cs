@@ -15,3 +15,14 @@ public record RunCodeProjectRequest(string EntryFilePath, IReadOnlyList<CodeFile
 // distinguishes (see campus-shared-editor-kit's CodeRunResult.status doc comment) — null
 // when the runner didn't reach a classifiable terminal state.
 public record CodeRunResultDto(string Stdout, string Stderr, int ExitCode, long DurationMs, bool TimedOut, string? Status);
+
+// SEK-01 integrated terminal: request/response command execution against a persistent,
+// workspace-mounted container (see TerminalSessionService's doc comment for why this is
+// deliberately not a full pty-backed live shell).
+public record TerminalStartRequest(IReadOnlyList<CodeFileDto> Files);
+
+public record TerminalStartResponse(Guid SessionId);
+
+public record TerminalExecRequest(string Command);
+
+public record TerminalExecResultDto(string Stdout, string Stderr, int ExitCode);

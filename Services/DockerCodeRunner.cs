@@ -36,7 +36,8 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         Func<string, string>? Compile,
         Func<string, string> Run,
         int RunTimeoutSeconds = 10,
-        int CompileTimeoutSeconds = 15);
+        int CompileTimeoutSeconds = 15,
+        int MemoryMb = 256);
 
     private static readonly Dictionary<string, LanguageSpec> Languages = new()
     {
@@ -92,11 +93,16 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         // happen in /tmp, inside one container's lifetime, never touching /box for
         // the jar. Classified via the "error:" marker kotlinc prints on compile
         // failures (see ClassifyRunResult), same idea as dotnet's "error CS".
+        // kotlinc is itself a JVM app compiling+linking against another JVM's stdlib jar, on
+        // top of the java runtime actually executing the result — measured hitting a SIGKILL
+        // (exit 137, OOM) under the other languages' shared 256m ceiling on a trivial
+        // hello-world, so it gets a higher one here rather than raising it for everyone.
         ["kotlin"] = new("campus-kotlin-runner:local",
             Compile: null,
             Run: entry => $"cp {Quote(entry)} /tmp/main.kt && kotlinc /tmp/main.kt -include-runtime -d /tmp/{RunFileName}.jar && java -jar /tmp/{RunFileName}.jar",
             RunTimeoutSeconds: 30,
-            CompileTimeoutSeconds: 45),
+            CompileTimeoutSeconds: 45,
+            MemoryMb: 768),
         ["shell"] = new("bash:5", Compile: null, Run: entry => $"bash {Quote(entry)}"),
     };
 
@@ -135,7 +141,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
 
             if (spec.Compile is not null)
             {
-                var compileResult = await RunContainerAsync(spec.Image, workDir, spec.Compile(entryFilePath), stdin: null, spec.CompileTimeoutSeconds, ct);
+                var compileResult = await RunContainerAsync(spec.Image, workDir, spec.Compile(entryFilePath), stdin: null, spec.CompileTimeoutSeconds, spec.MemoryMb, ct);
                 if (compileResult.ExitCode != 0 || compileResult.TimedOut)
                 {
                     return new CodeRunResultDto("", compileResult.Stderr, compileResult.ExitCode,
@@ -144,7 +150,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
                 }
             }
 
-            var runResult = await RunContainerAsync(spec.Image, workDir, spec.Run(entryFilePath), stdin, spec.RunTimeoutSeconds, ct);
+            var runResult = await RunContainerAsync(spec.Image, workDir, spec.Run(entryFilePath), stdin, spec.RunTimeoutSeconds, spec.MemoryMb, ct);
             var status = ClassifyRunResult(entryFile.Language, spec, runResult);
             return new CodeRunResultDto(runResult.Stdout, runResult.Stderr, runResult.ExitCode,
                 (long)stopwatch.Elapsed.TotalMilliseconds, runResult.TimedOut, status);
@@ -231,7 +237,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
     private sealed record ContainerResult(string Stdout, string Stderr, int ExitCode, bool TimedOut);
 
     private static async Task<ContainerResult> RunContainerAsync(
-        string image, string workDir, string command, string? stdin, int timeoutSeconds, CancellationToken ct)
+        string image, string workDir, string command, string? stdin, int timeoutSeconds, int memoryMb, CancellationToken ct)
     {
         var psi = new ProcessStartInfo("docker")
         {
@@ -241,7 +247,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var arg in BuildDockerArgs(image, workDir, command, timeoutSeconds))
+        foreach (var arg in BuildDockerArgs(image, workDir, command, timeoutSeconds, memoryMb))
         {
             psi.ArgumentList.Add(arg);
         }
@@ -302,13 +308,19 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
     // integration seam these deliberately stay separate from, mirroring how
     // Judge0ClientTests only ever unit-tested BuildAdditionalFilesZip (a pure helper), never
     // the live HTTP calls.
-    public static string[] BuildDockerArgs(string image, string hostWorkDir, string command, int timeoutSeconds) =>
+    public static string[] BuildDockerArgs(string image, string hostWorkDir, string command, int timeoutSeconds, int memoryMb = 256) =>
     [
         "run", "--rm", "-i",
         "--network", "none",
-        "--memory", "256m",
-        "--memory-swap", "256m",
-        "--pids-limit", "64",
+        "--memory", $"{memoryMb}m",
+        "--memory-swap", $"{memoryMb}m",
+        // 64 was enough for every original language, but Go's toolchain forks several
+        // multi-threaded build/link/cache subprocesses even for `go run` on a trivial
+        // program — each OS thread counts against the cgroup pids controller too, so
+        // 64 was observed hitting "failed to create new OS thread (errno=11)" on a
+        // plain hello-world. 256 gives real headroom without meaningfully loosening
+        // the fork-bomb ceiling this limit exists for.
+        "--pids-limit", "256",
         "--cpus", "1.0",
         "-v", $"{hostWorkDir}:/box",
         "-w", "/box",

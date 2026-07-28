@@ -186,6 +186,77 @@ public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, I
             new WhitelistSiteDto(site!.Id, site.Url, site.ApprovedAt)));
     }
 
+    // SDA-03: curated engineering/CS reference sites a teacher/admin can pre-approve in one
+    // click instead of waiting for students to request each one individually.
+    private static readonly string[] DefaultEngineeringSites =
+    [
+        "https://github.com",
+        "https://stackoverflow.com",
+        "https://developer.mozilla.org",
+        "https://docs.python.org",
+        "https://www.w3schools.com",
+        "https://www.geeksforgeeks.org",
+        "https://leetcode.com",
+        "https://www.hackerrank.com",
+        "https://www.overleaf.com",
+        "https://arxiv.org",
+        "https://replit.com",
+        "https://www.npmjs.com",
+        "https://pypi.org",
+        "https://www.wolframalpha.com",
+        "https://www.freecodecamp.org",
+        "https://www.khanacademy.org",
+    ];
+
+    // SDA-03
+    [HttpPost("whitelist/defaults/engineering")]
+    public async Task<ActionResult<AddDefaultSitesResponse>> AddEngineeringDefaults()
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (caller.AccountType is not (AccountType.Teacher or AccountType.AdminTier))
+        {
+            return Forbid();
+        }
+
+        var added = new List<WhitelistSiteDto>();
+        var alreadyWhitelisted = new List<string>();
+
+        foreach (var url in DefaultEngineeringSites)
+        {
+            // DefaultEngineeringSites entries are already well-formed absolute https:// URLs,
+            // so normalization here can only ever succeed — TryNormalizeUrl is reused purely
+            // to match the exact (scheme, lowercase host, no trailing root path) shape
+            // already stored for sites approved via the request/approve flow.
+            TryNormalizeUrl(url, out var normalizedUrl);
+
+            var existing = await db.WhitelistSites
+                .FirstOrDefaultAsync(s => s.CollegeId == caller.CollegeId && s.Url == normalizedUrl);
+            if (existing is not null)
+            {
+                alreadyWhitelisted.Add(normalizedUrl);
+                continue;
+            }
+
+            var site = new WhitelistSite
+            {
+                Id = Guid.NewGuid(),
+                CollegeId = caller.CollegeId,
+                Url = normalizedUrl,
+                ApprovedAt = DateTime.UtcNow,
+            };
+            db.WhitelistSites.Add(site);
+            added.Add(new WhitelistSiteDto(site.Id, site.Url, site.ApprovedAt));
+        }
+
+        await db.SaveChangesAsync();
+
+        return Ok(new AddDefaultSitesResponse(added, alreadyWhitelisted));
+    }
+
     // AIS-01: "a role without that permission cannot see the summary anywhere, including
     // in the student's own profile view" — the permission check applies unconditionally,
     // there's no self-view exception even for the student the summary is about.

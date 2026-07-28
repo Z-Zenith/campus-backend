@@ -353,6 +353,83 @@ public class BrowsingControllerTests
         Assert.Single(await db.WhitelistSites.Where(s => s.CollegeId == requesterA.CollegeId).ToListAsync());
     }
 
+    // SDA-03
+    [Fact]
+    public async Task Sda03_AddEngineeringDefaults_ForbidsStudents()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.AddEngineeringDefaults();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // SDA-03
+    [Fact]
+    public async Task Sda03_AddEngineeringDefaults_AddsAllCuratedSitesForCallersCollege()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.AddEngineeringDefaults();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<AddDefaultSitesResponse>(ok.Value);
+        Assert.Empty(response.AlreadyWhitelisted);
+        Assert.NotEmpty(response.Added);
+        Assert.Equal(response.Added.Count, await db.WhitelistSites.CountAsync(s => s.CollegeId == teacher.CollegeId));
+        Assert.Contains(response.Added, site => site.Url == "https://github.com");
+    }
+
+    // SDA-03: calling it twice must not duplicate rows or violate the (college_id, url)
+    // unique index — the second call reports everything as already whitelisted.
+    [Fact]
+    public async Task Sda03_AddEngineeringDefaults_IsIdempotent()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var first = await controller.AddEngineeringDefaults();
+        var firstCount = ((AddDefaultSitesResponse)((OkObjectResult)first.Result!).Value!).Added.Count;
+
+        var second = await controller.AddEngineeringDefaults();
+        var secondResponse = (AddDefaultSitesResponse)((OkObjectResult)second.Result!).Value!;
+
+        Assert.Empty(secondResponse.Added);
+        Assert.Equal(firstCount, secondResponse.AlreadyWhitelisted.Count);
+        Assert.Equal(firstCount, await db.WhitelistSites.CountAsync(s => s.CollegeId == teacher.CollegeId));
+    }
+
+    // SDA-03: college-scoped like every other whitelist_sites write — adding defaults for
+    // one college must not create or count rows belonging to another.
+    [Fact]
+    public async Task Sda03_AddEngineeringDefaults_IsScopedToCallersCollege()
+    {
+        await using var db = NewDb();
+        var teacherA = NewUser(AccountType.Teacher);
+        var teacherB = NewUser(AccountType.Teacher);
+        db.Users.AddRange(teacherA, teacherB);
+        await db.SaveChangesAsync();
+
+        await ControllerAs(db, teacherA).AddEngineeringDefaults();
+        var resultB = await ControllerAs(db, teacherB).AddEngineeringDefaults();
+
+        var responseB = (AddDefaultSitesResponse)((OkObjectResult)resultB.Result!).Value!;
+        Assert.Empty(responseB.AlreadyWhitelisted);
+        Assert.NotEmpty(responseB.Added);
+        Assert.Equal(responseB.Added.Count, await db.WhitelistSites.CountAsync(s => s.CollegeId == teacherB.CollegeId));
+    }
+
     // AIS-07: "never shown to the student" — enforced by requiring a teacher/admin caller.
     [Fact]
     public async Task Ais07_SuspiciousFlags_ForbidsStudents()

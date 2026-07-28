@@ -746,4 +746,91 @@ public class UsersControllerTests
         var matches = Assert.IsAssignableFrom<List<UserSearchResultDto>>(ok.Value);
         Assert.Empty(matches);
     }
+
+    // Backs the User management table - unlike Search, a blank query means "list
+    // everyone" (paginated), not "no results".
+    [Fact]
+    public async Task List_ForbidsCallerWithNoAdminCapabilityPermission()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.List(null, 1, 20);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task List_ReturnsAllCollegeUsers_ForBlankQuery()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var studentA = NewUser(AccountType.Student, admin.CollegeId);
+        var studentB = NewUser(AccountType.Student, admin.CollegeId);
+        var otherCollegeUser = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, studentA, studentB, otherCollegeUser);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.List(null, 1, 20);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var page = Assert.IsType<UsersPageResponse>(ok.Value);
+        // admin + studentA + studentB, not otherCollegeUser - college-scoped, same
+        // tenant-isolation rule every other cross-college-sensitive endpoint enforces.
+        Assert.Equal(3, page.Total);
+        Assert.Equal(3, page.Items.Count);
+        Assert.DoesNotContain(page.Items, u => u.Id == otherCollegeUser.Id);
+    }
+
+    [Fact]
+    public async Task List_IncludesRoleCodes_ForEachUser()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.List(null, 1, 20);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var page = Assert.IsType<UsersPageResponse>(ok.Value);
+        var adminRow = Assert.Single(page.Items, u => u.Id == admin.Id);
+        Assert.Contains("admin", adminRow.RoleCodes);
+    }
+
+    [Fact]
+    public async Task List_PaginatesResults()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        for (var i = 0; i < 5; i++)
+        {
+            db.Users.Add(NewUser(AccountType.Student, admin.CollegeId));
+        }
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var firstPage = await controller.List(null, 1, 2);
+        var secondPage = await controller.List(null, 2, 2);
+
+        var firstOk = Assert.IsType<OkObjectResult>(firstPage.Result);
+        var firstBody = Assert.IsType<UsersPageResponse>(firstOk.Value);
+        var secondOk = Assert.IsType<OkObjectResult>(secondPage.Result);
+        var secondBody = Assert.IsType<UsersPageResponse>(secondOk.Value);
+
+        Assert.Equal(6, firstBody.Total);
+        Assert.Equal(2, firstBody.Items.Count);
+        Assert.Equal(2, secondBody.Items.Count);
+        Assert.Empty(firstBody.Items.Select(u => u.Id).Intersect(secondBody.Items.Select(u => u.Id)));
+    }
 }

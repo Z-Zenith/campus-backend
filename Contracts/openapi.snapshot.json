@@ -4136,6 +4136,68 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32",
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPageResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPageResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPageResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/users/{id}/profile": {
@@ -7773,6 +7835,79 @@
           },
           "identifier": {
             "type": "string"
+          }
+        }
+      },
+      "UsersPageResponse": {
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserSummaryDto"
+            }
+          },
+          "total": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "UserSummaryDto": {
+        "required": [
+          "id",
+          "fullName",
+          "identifier",
+          "accountType",
+          "isActive",
+          "departmentId",
+          "departmentName",
+          "roleCodes"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "identifier": {
+            "type": "string"
+          },
+          "accountType": {
+            "type": "string"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "departmentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "departmentName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "roleCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

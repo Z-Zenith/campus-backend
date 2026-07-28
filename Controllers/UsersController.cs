@@ -218,6 +218,117 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         return NoContent();
     }
 
+    // Read-only, additive: lets admin-web resolve a name/identifier to a userId before an
+    // action (assign-HoD, reset-password, role-binding, fee lookup), instead of requiring
+    // an admin to paste a raw GUID. Gated on holding at least one admin-capability
+    // permission (the same set GET /me/capabilities reports) rather than a bare
+    // [Authorize] — a loosely-gated search here would let ANY authenticated token,
+    // including students/teachers, enumerate every user in the college by name, which is
+    // a real privacy hole this endpoint must not introduce. Each caller's specific write
+    // action (e.g. reset_password) still re-checks its own permission independently —
+    // this endpoint only has to confirm the caller is admin-capable at all.
+    [HttpGet("search")]
+    public async Task<ActionResult<List<UserSearchResultDto>>> Search([FromQuery] string q)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var callerCapabilities = await permissions.GetEffectivePermissionsAsync(caller.Id, AdminCapabilityPermissions.Codes);
+        if (callerCapabilities.Count == 0)
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            return Ok(new List<UserSearchResultDto>());
+        }
+
+        var needle = q.ToLower();
+        var matches = await db.Users
+            .Where(u => u.CollegeId == caller.CollegeId)
+            .Where(u => u.FullName.ToLower().Contains(needle) || u.Identifier.ToLower().Contains(needle))
+            .OrderBy(u => u.FullName)
+            .Take(20)
+            .Select(u => new UserSearchResultDto(u.Id, u.FullName, u.Identifier))
+            .ToListAsync();
+
+        return Ok(matches);
+    }
+
+    // Read-only, additive: backs the consolidated User management page's browsable
+    // table (M365 Active-Users-style grid) - GET /users/search is typeahead-only (no
+    // results for a blank query, capped at 20); this is the paginated "list everyone"
+    // counterpart, with the richer per-row columns a table needs. Same admin-capability
+    // gate and college scope as Search - no new exposure, just a different shape.
+    [HttpGet]
+    public async Task<ActionResult<UsersPageResponse>> List([FromQuery] string? q, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var callerCapabilities = await permissions.GetEffectivePermissionsAsync(caller.Id, AdminCapabilityPermissions.Codes);
+        if (callerCapabilities.Count == 0)
+        {
+            return Forbid();
+        }
+
+        page = Math.Max(page, 1);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+
+        var query = db.Users.Where(u => u.CollegeId == caller.CollegeId);
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var needle = q.ToLower();
+            query = query.Where(u => u.FullName.ToLower().Contains(needle) || u.Identifier.ToLower().Contains(needle));
+        }
+
+        var total = await query.CountAsync();
+        var page_ = await query
+            .OrderBy(u => u.FullName)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(u => new
+            {
+                u.Id,
+                u.FullName,
+                u.Identifier,
+                u.AccountType,
+                u.IsActive,
+                u.DepartmentId,
+                DepartmentName = u.Department != null ? u.Department.Name : null,
+            })
+            .ToListAsync();
+
+        var pageUserIds = page_.Select(u => u.Id).ToList();
+        var roleCodesByUser = await db.RoleBindings
+            .Where(b => pageUserIds.Contains(b.UserId))
+            .GroupBy(b => b.UserId)
+            .Select(g => new { UserId = g.Key, RoleCodes = g.Select(b => b.RoleCode).ToList() })
+            .ToListAsync();
+        var roleCodesLookup = roleCodesByUser.ToDictionary(r => r.UserId, r => r.RoleCodes);
+
+        var items = page_
+            .Select(u => new UserSummaryDto(
+                u.Id,
+                u.FullName,
+                u.Identifier,
+                u.AccountType.ToString(),
+                u.IsActive,
+                u.DepartmentId,
+                u.DepartmentName,
+                roleCodesLookup.GetValueOrDefault(u.Id, [])))
+            .ToList();
+
+        return Ok(new UsersPageResponse(items, total));
+    }
+
     private async Task<User?> CurrentUserAsync()
     {
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);

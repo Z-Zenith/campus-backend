@@ -647,4 +647,190 @@ public class UsersControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
     }
+
+    // Search must not be reachable by a caller holding none of the admin-capability
+    // permissions — otherwise any authenticated token (including a student's) could
+    // enumerate every user in the college by name.
+    [Fact]
+    public async Task Search_ForbidsCallerWithNoAdminCapabilityPermission()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.Search("anything");
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // Any one admin-capability permission is enough to search — the search itself is
+    // low-sensitivity (name/identifier only); each caller's actual write action
+    // re-checks its own specific permission independently.
+    [Fact]
+    public async Task Search_SucceedsForCallerHoldingAnyAdminCapabilityPermission()
+    {
+        await using var db = NewDb();
+        var finance = NewUser(AccountType.AdminTier);
+        var target = NewUser(AccountType.Student, finance.CollegeId);
+        target.FullName = "Alice Example";
+        db.Users.AddRange(finance, target);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = finance.Id, PermissionCode = "manage_fees", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, finance);
+        var result = await controller.Search("alice");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var matches = Assert.IsAssignableFrom<List<UserSearchResultDto>>(ok.Value);
+        var match = Assert.Single(matches);
+        Assert.Equal(target.Id, match.Id);
+    }
+
+    // Matches on Identifier too, not just FullName (e.g. searching by roll number/username).
+    [Fact]
+    public async Task Search_MatchesOnIdentifier()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var target = NewUser(AccountType.Student, admin.CollegeId);
+        target.Identifier = "roll-2026-042";
+        db.Users.AddRange(admin, target);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Search("2026-042");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var matches = Assert.IsAssignableFrom<List<UserSearchResultDto>>(ok.Value);
+        Assert.Single(matches);
+    }
+
+    // College-scoped: this endpoint must not let an admin-capable caller enumerate
+    // another college's users by name — same tenant-isolation rule every other
+    // cross-college-sensitive endpoint in this controller already enforces.
+    [Fact]
+    public async Task Search_ExcludesUsersFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var otherCollegeUser = NewUser(AccountType.Student);
+        otherCollegeUser.FullName = "Alice Example";
+        db.Users.AddRange(admin, otherCollegeUser);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Search("alice");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var matches = Assert.IsAssignableFrom<List<UserSearchResultDto>>(ok.Value);
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public async Task Search_ReturnsEmptyList_ForBlankQuery()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Search("   ");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var matches = Assert.IsAssignableFrom<List<UserSearchResultDto>>(ok.Value);
+        Assert.Empty(matches);
+    }
+
+    // Backs the User management table - unlike Search, a blank query means "list
+    // everyone" (paginated), not "no results".
+    [Fact]
+    public async Task List_ForbidsCallerWithNoAdminCapabilityPermission()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.List(null, 1, 20);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task List_ReturnsAllCollegeUsers_ForBlankQuery()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var studentA = NewUser(AccountType.Student, admin.CollegeId);
+        var studentB = NewUser(AccountType.Student, admin.CollegeId);
+        var otherCollegeUser = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, studentA, studentB, otherCollegeUser);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.List(null, 1, 20);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var page = Assert.IsType<UsersPageResponse>(ok.Value);
+        // admin + studentA + studentB, not otherCollegeUser - college-scoped, same
+        // tenant-isolation rule every other cross-college-sensitive endpoint enforces.
+        Assert.Equal(3, page.Total);
+        Assert.Equal(3, page.Items.Count);
+        Assert.DoesNotContain(page.Items, u => u.Id == otherCollegeUser.Id);
+    }
+
+    [Fact]
+    public async Task List_IncludesRoleCodes_ForEachUser()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.List(null, 1, 20);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var page = Assert.IsType<UsersPageResponse>(ok.Value);
+        var adminRow = Assert.Single(page.Items, u => u.Id == admin.Id);
+        Assert.Contains("admin", adminRow.RoleCodes);
+    }
+
+    [Fact]
+    public async Task List_PaginatesResults()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        for (var i = 0; i < 5; i++)
+        {
+            db.Users.Add(NewUser(AccountType.Student, admin.CollegeId));
+        }
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var firstPage = await controller.List(null, 1, 2);
+        var secondPage = await controller.List(null, 2, 2);
+
+        var firstOk = Assert.IsType<OkObjectResult>(firstPage.Result);
+        var firstBody = Assert.IsType<UsersPageResponse>(firstOk.Value);
+        var secondOk = Assert.IsType<OkObjectResult>(secondPage.Result);
+        var secondBody = Assert.IsType<UsersPageResponse>(secondOk.Value);
+
+        Assert.Equal(6, firstBody.Total);
+        Assert.Equal(2, firstBody.Items.Count);
+        Assert.Equal(2, secondBody.Items.Count);
+        Assert.Empty(firstBody.Items.Select(u => u.Id).Intersect(secondBody.Items.Select(u => u.Id)));
+    }
 }

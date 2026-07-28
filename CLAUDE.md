@@ -39,12 +39,23 @@ cgroup v2 host). Requires:
   `dotnet run`; a containerized `backend-api` would need the host's Docker socket
   bind-mounted in — a real security tradeoff, not currently wired up, see the doc
   comment).
-- The base images in `DockerCodeRunner.Languages` pulled at least once (`python:3.12-slim`,
-  `gcc:13`, `eclipse-temurin:21-jdk`, `node:20-slim`, `mcr.microsoft.com/dotnet/sdk:8.0`,
-  `keinos/sqlite3:latest`) — first Run pays the pull cost otherwise.
-- `campus-ts-runner:local` built once (typescript needs to be pre-installed since
-  submissions run with `--network none`): `docker build -t campus-ts-runner:local -f
-  docker/ts-runner.Dockerfile .`
+- Every base image in `DockerCodeRunner.Languages` (`Services/DockerCodeRunner.cs:42-107`)
+  pulled at least once: `python:3.12-slim`, `gcc:13`, `eclipse-temurin:21-jdk`,
+  `node:20-slim`, `mcr.microsoft.com/dotnet/sdk:8.0`, `keinos/sqlite3:latest`,
+  `golang:1.22-alpine`, `rust:1-slim`, `ruby:3-slim`, `php:8-cli`, `bash:5` — first Run
+  pays the pull cost otherwise.
+- Three custom images built once, since their runtimes need to be pre-installed rather than
+  fetched at run time (submissions run with `--network none`):
+  - `campus-ts-runner:local` (typescript): `docker build -t campus-ts-runner:local -f
+    docker/ts-runner.Dockerfile .`
+  - `campus-kotlin-runner:local` (kotlin): `docker build -t campus-kotlin-runner:local -f
+    docker/kotlin-runner.Dockerfile .`
+  - `campus-dev-terminal:local` (the Coding app's integrated terminal, used by
+    `Services/TerminalSessionService.cs` rather than `DockerCodeRunner` directly):
+    `docker build -t campus-dev-terminal:local -f docker/dev-terminal.Dockerfile .`
+
+Run `docker/setup-code-images.sh` from the repo root to pull/build all of the above in one
+shot instead of doing it by hand.
 
 `campus-platform/docker-compose.yml`'s `judge0-*` services are no longer in this
 execution path — left in place rather than removed as part of this change, since

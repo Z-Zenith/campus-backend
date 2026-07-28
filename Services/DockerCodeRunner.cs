@@ -181,8 +181,12 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         }
         // dotnet and kotlin have no separate compile step (see Languages table comments) —
         // distinguish a build failure from a runtime exception via each compiler's own
-        // error marker ("error CS..." / "error:").
-        if (language == "dotnet" && spec.Compile is null && result.Stderr.Contains("error CS", StringComparison.Ordinal))
+        // error marker ("error CS..." / "error:"). `dotnet build`/`dotnet run` print
+        // compiler diagnostics (including "error CS...") to stdout, not stderr — stderr
+        // only gets the generic "The build failed." summary line — so this must check
+        // Stdout, confirmed by reproducing a real build failure against the actual image
+        // (kotlinc, by contrast, does print its "error:" marker to stderr).
+        if (language == "dotnet" && spec.Compile is null && result.Stdout.Contains("error CS", StringComparison.Ordinal))
         {
             return "compilation_error";
         }

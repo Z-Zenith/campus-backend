@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -52,7 +51,7 @@ var connectionString = builder.Configuration.GetConnectionString("Campus")
 // ASPNETCORE_ENVIRONMENT=Production is set without also overriding ConnectionStrings__Campus,
 // the app would otherwise start up fine and silently point at the dev database.
 const string DevConnectionStringPlaceholder =
-    "Host=localhost;Port=5432;Database=campus;Username=campus;Password=campus_dev";
+    "Server=localhost,1433;Database=campus;User Id=campus;Password=campus_dev;TrustServerCertificate=true";
 if (!builder.Environment.IsDevelopment() && connectionString == DevConnectionStringPlaceholder)
 {
     throw new InvalidOperationException(
@@ -60,19 +59,7 @@ if (!builder.Environment.IsDevelopment() && connectionString == DevConnectionStr
         "Set the ConnectionStrings__Campus environment variable before starting in a non-Development environment.");
 }
 
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString, npgsqlOptions =>
-{
-    npgsqlOptions
-        .MapEnum<AccountType>()
-        .MapEnum<AssignmentType>()
-        .MapEnum<AttendanceStatus>()
-        .MapEnum<DocType>()
-        .MapEnum<FeeStatus>()
-        .MapEnum<GroupType>()
-        .MapEnum<NotificationType>()
-        .MapEnum<ScopeKind>()
-        .MapEnum<WhitelistRequestStatus>();
-}));
+builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
 
 // #131: TOTP secrets are encrypted at rest via Data Protection (see TotpService). Keys must
 // be persisted outside the container's ephemeral filesystem or every restart/redeploy would

@@ -29,12 +29,6 @@ public partial class Event
     [Column("created_by")]
     public Guid CreatedBy { get; set; }
 
-    [Column("restricted_years")]
-    public List<int>? RestrictedYears { get; set; }
-
-    [Column("restricted_departments")]
-    public List<Guid>? RestrictedDepartments { get; set; }
-
     [ForeignKey("CollegeId")]
     [InverseProperty("Events")]
     public virtual College College { get; set; } = null!;
@@ -45,4 +39,17 @@ public partial class Event
 
     [InverseProperty("Event")]
     public virtual ICollection<EventRegistration> EventRegistrations { get; set; } = new List<EventRegistration>();
+
+    // SQL Server has no array column type — these were `int[]`/`uuid[]` columns under
+    // Postgres (see MIGRATIONS.md / db/init/01_schema.sql history) and are now junction
+    // tables so CalendarController's EligibleEventsQuery still translates to SQL instead of
+    // throwing on an unsupported client-eval. Null-vs-empty is no longer distinguishable
+    // (both now mean "no restriction on this dimension") — the prior null-check "restricted to
+    // nothing" edge case was never exercised by any caller (CreateEventRequest only ever sends
+    // null or a real list), so this is treated as an accepted behavior change, not a bug.
+    [InverseProperty("Event")]
+    public virtual ICollection<EventRestrictedYear> RestrictedYears { get; set; } = new List<EventRestrictedYear>();
+
+    [InverseProperty("Event")]
+    public virtual ICollection<EventRestrictedDepartment> RestrictedDepartments { get; set; } = new List<EventRestrictedDepartment>();
 }

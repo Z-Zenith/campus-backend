@@ -44,6 +44,10 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<EventRegistration> EventRegistrations { get; set; }
 
+    public virtual DbSet<EventRestrictedYear> EventRestrictedYears { get; set; }
+
+    public virtual DbSet<EventRestrictedDepartment> EventRestrictedDepartments { get; set; }
+
     public virtual DbSet<ExternalMark> ExternalMarks { get; set; }
 
     public virtual DbSet<FeeRecord> FeeRecords { get; set; }
@@ -118,25 +122,12 @@ public partial class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder
-            .HasPostgresEnum<AccountType>()
-            .HasPostgresEnum<AssignmentType>()
-            .HasPostgresEnum<AttendanceStatus>()
-            .HasPostgresEnum<DocType>()
-            .HasPostgresEnum<FeeStatus>()
-            .HasPostgresEnum<GroupType>()
-            .HasPostgresEnum<NotificationType>()
-            .HasPostgresEnum<OcrStatus>()
-            .HasPostgresEnum<ScopeKind>()
-            .HasPostgresEnum<WhitelistRequestStatus>()
-            .HasPostgresExtension("pgcrypto");
-
         modelBuilder.Entity<AiDetectionReport>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("ai_detection_reports_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CheckedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CheckedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Submission).WithMany(p => p.AiDetectionReports).HasConstraintName("ai_detection_reports_submission_id_fkey");
         });
@@ -145,8 +136,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("assignments_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Type).HasColumnType("assignment_type");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Type).HasConversion(EnumConverters.SnakeCase<AssignmentType>()).HasMaxLength(30);
 
             entity.HasOne(d => d.Subject).WithMany(p => p.Assignments).HasConstraintName("assignments_subject_id_fkey");
 
@@ -159,9 +150,9 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("attendance_records_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.MarkedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.Status).HasColumnType("attendance_status");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.MarkedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.Status).HasConversion(EnumConverters.SnakeCase<AttendanceStatus>()).HasMaxLength(30);
 
             entity.HasOne(d => d.ClassSession).WithMany(p => p.AttendanceRecords).HasConstraintName("attendance_records_class_session_id_fkey");
 
@@ -176,7 +167,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("autograde_suggestions_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Submission).WithMany(p => p.AutogradeSuggestions).HasConstraintName("autograde_suggestions_submission_id_fkey");
         });
@@ -185,8 +176,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("browsing_history_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.VisitedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.VisitedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.BrowsingHistories).HasConstraintName("browsing_history_student_id_fkey");
         });
@@ -195,8 +186,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("browsing_history_summaries_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.GeneratedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.GeneratedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.BrowsingHistorySummaries).HasConstraintName("browsing_history_summaries_student_id_fkey");
         });
@@ -205,7 +196,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("class_sessions_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.ActualTeacher).WithMany(p => p.ClassSessions)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -218,10 +209,10 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("code_projects_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.Stdin).HasDefaultValueSql("''::text");
-            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.Stdin).HasDefaultValue("");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Owner).WithMany(p => p.CodeProjects).HasConstraintName("code_projects_owner_id_fkey");
         });
@@ -230,10 +221,10 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("code_files_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Content).HasDefaultValueSql("''::text");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Content).HasDefaultValue("");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Project).WithMany(p => p.CodeFiles).HasConstraintName("code_files_project_id_fkey");
         });
@@ -242,17 +233,17 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("colleges_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
             entity.Property(e => e.TimeZone).HasDefaultValue("UTC");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
         });
 
         modelBuilder.Entity<CopyCheckFlag>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("copy_check_flags_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.FlaggedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.FlaggedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.SubmissionA).WithMany(p => p.CopyCheckFlagSubmissionAs).HasConstraintName("copy_check_flags_submission_a_id_fkey");
 
@@ -263,7 +254,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("custom_calendar_entries_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.CustomCalendarEntries).HasConstraintName("custom_calendar_entries_student_id_fkey");
         });
@@ -272,7 +263,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("departments_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.College).WithMany(p => p.Departments).HasConstraintName("departments_college_id_fkey");
 
@@ -285,9 +276,9 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("documents_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.DocType).HasColumnType("doc_type");
-            entity.Property(e => e.OcrStatus).HasColumnType("ocr_status");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.DocType).HasConversion(EnumConverters.SnakeCase<DocType>()).HasMaxLength(30);
+            entity.Property(e => e.OcrStatus).HasConversion(EnumConverters.SnakeCase<OcrStatus>()).HasMaxLength(30);
 
             entity.HasOne(d => d.Owner).WithMany(p => p.Documents).HasConstraintName("documents_owner_id_fkey");
         });
@@ -296,7 +287,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("events_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.College).WithMany(p => p.Events).HasConstraintName("events_college_id_fkey");
 
@@ -305,12 +296,42 @@ public partial class AppDbContext : DbContext
                 .HasConstraintName("events_created_by_fkey");
         });
 
+        // SQL Server has no array column type (unlike the int[]/uuid[] columns this mirrored
+        // in Postgres) — restricted_years/restricted_departments are now junction tables so
+        // EligibleEventsQuery's filter still translates to SQL (see CalendarController.cs).
+        modelBuilder.Entity<EventRestrictedYear>(entity =>
+        {
+            entity.ToTable("event_restricted_years");
+            entity.HasKey(e => new { e.EventId, e.Year });
+
+            entity.HasOne(d => d.Event).WithMany(p => p.RestrictedYears)
+                .HasForeignKey(d => d.EventId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("event_restricted_years_event_id_fkey");
+        });
+
+        modelBuilder.Entity<EventRestrictedDepartment>(entity =>
+        {
+            entity.ToTable("event_restricted_departments");
+            entity.HasKey(e => new { e.EventId, e.DepartmentId });
+
+            entity.HasOne(d => d.Event).WithMany(p => p.RestrictedDepartments)
+                .HasForeignKey(d => d.EventId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("event_restricted_departments_event_id_fkey");
+
+            entity.HasOne(d => d.Department).WithMany()
+                .HasForeignKey(d => d.DepartmentId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("event_restricted_departments_department_id_fkey");
+        });
+
         modelBuilder.Entity<EventRegistration>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("event_registrations_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.RegisteredAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.RegisteredAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Event).WithMany(p => p.EventRegistrations).HasConstraintName("event_registrations_event_id_fkey");
 
@@ -321,8 +342,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("external_marks_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.ApprovedByNavigation).WithMany(p => p.ExternalMarkApprovedByNavigations)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -341,8 +362,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("fee_records_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Status).HasColumnType("fee_status");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Status).HasConversion(EnumConverters.SnakeCase<FeeStatus>()).HasMaxLength(30);
 
             entity.HasOne(d => d.Student).WithMany(p => p.FeeRecords).HasConstraintName("fee_records_student_id_fkey");
         });
@@ -351,8 +372,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("groups_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Type).HasColumnType("group_type");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Type).HasConversion(EnumConverters.SnakeCase<GroupType>()).HasMaxLength(30);
 
             entity.HasOne(d => d.College).WithMany(p => p.Groups).HasConstraintName("groups_college_id_fkey");
 
@@ -369,8 +390,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("group_members_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.JoinedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.JoinedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Group).WithMany(p => p.GroupMembers).HasConstraintName("group_members_group_id_fkey");
 
@@ -381,8 +402,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("group_posts_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Author).WithMany(p => p.GroupPosts).HasConstraintName("group_posts_author_id_fkey");
 
@@ -393,7 +414,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("internal_marks_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Assignment).WithMany(p => p.InternalMarks)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -412,8 +433,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("materials_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.UploadedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.UploadedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Group).WithMany(p => p.Materials)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -432,8 +453,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("messages_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SentAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SentAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Sender).WithMany(p => p.Messages)
                 .OnDelete(DeleteBehavior.Restrict)
@@ -446,8 +467,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("message_threads_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.MessageThreadStudents).HasConstraintName("message_threads_student_id_fkey");
 
@@ -458,10 +479,10 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("notes_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.ContentMarkdown).HasDefaultValueSql("''::text");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.ContentMarkdown).HasDefaultValue("");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.UpdatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Owner).WithMany(p => p.Notes).HasConstraintName("notes_owner_id_fkey");
         });
@@ -470,8 +491,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("note_links_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.FromNote).WithMany(p => p.NoteLinkFromNotes).HasConstraintName("note_links_from_note_id_fkey");
 
@@ -482,10 +503,10 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("notifications_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.Payload).HasDefaultValueSql("'{}'::jsonb");
-            entity.Property(e => e.Type).HasColumnType("notification_type");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.Payload).HasDefaultValueSql("N'{}'");
+            entity.Property(e => e.Type).HasConversion(EnumConverters.SnakeCase<NotificationType>()).HasMaxLength(30);
 
             entity.HasOne(d => d.Recipient).WithMany(p => p.Notifications).HasConstraintName("notifications_recipient_id_fkey");
         });
@@ -494,8 +515,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("parent_wards_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.ParentUser).WithMany(p => p.ParentWardParentUsers).HasConstraintName("parent_wards_parent_user_id_fkey");
 
@@ -506,8 +527,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("payment_transactions_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.ProcessedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.ProcessedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.FeeRecord).WithMany(p => p.PaymentTransactions).HasConstraintName("payment_transactions_fee_record_id_fkey");
         });
@@ -521,8 +542,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("permission_grants_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.GrantedByNavigation).WithMany(p => p.PermissionGrantGrantedByNavigations)
                 .OnDelete(DeleteBehavior.Restrict)
@@ -537,8 +558,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("plagiarism_reports_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CheckedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CheckedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Submission).WithMany(p => p.PlagiarismReports).HasConstraintName("plagiarism_reports_submission_id_fkey");
         });
@@ -547,7 +568,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Code).HasName("roles_pkey");
 
-            entity.Property(e => e.DefaultScopeKind).HasColumnType("scope_kind");
+            entity.Property(e => e.DefaultScopeKind).HasConversion(EnumConverters.SnakeCase<ScopeKind>()).HasMaxLength(30);
 
             entity.HasMany(d => d.PermissionCodes).WithMany(p => p.RoleCodes)
                 .UsingEntity<Dictionary<string, object>>(
@@ -571,9 +592,9 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("role_bindings_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.GrantedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.ScopeType).HasColumnType("scope_kind");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.GrantedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.ScopeType).HasConversion(EnumConverters.SnakeCase<ScopeKind>()).HasMaxLength(30);
 
             entity.HasOne(d => d.Department).WithMany(p => p.RoleBindings)
                 .OnDelete(DeleteBehavior.Restrict)
@@ -590,7 +611,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("sections_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Department).WithMany(p => p.Sections).HasConstraintName("sections_department_id_fkey");
         });
@@ -599,7 +620,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("section_enrollments_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Section).WithMany(p => p.SectionEnrollments).HasConstraintName("section_enrollments_section_id_fkey");
 
@@ -610,8 +631,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("section_feedback_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Section).WithMany(p => p.SectionFeedbacks).HasConstraintName("section_feedback_section_id_fkey");
 
@@ -622,7 +643,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("subjects_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Department).WithMany(p => p.Subjects).HasConstraintName("subjects_department_id_fkey");
 
@@ -635,8 +656,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("submissions_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Assignment).WithMany(p => p.Submissions).HasConstraintName("submissions_assignment_id_fkey");
 
@@ -647,8 +668,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("suspicious_flags_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.FlaggedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.FlaggedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Assignment).WithMany(p => p.SuspiciousFlags)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -665,8 +686,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("teacher_feedback_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.TeacherFeedbackStudents).HasConstraintName("teacher_feedback_student_id_fkey");
 
@@ -677,8 +698,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("teacher_reports_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Section).WithMany(p => p.TeacherReports)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -695,7 +716,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("teacher_section_assignments_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Section).WithMany(p => p.TeacherSectionAssignments).HasConstraintName("teacher_section_assignments_section_id_fkey");
 
@@ -708,9 +729,9 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("timetable_change_requests_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.RequestedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.Status).HasDefaultValueSql("'pending'::text");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.RequestedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(e => e.Status).HasDefaultValue("pending");
 
             entity.HasOne(d => d.ReviewedByNavigation).WithMany(p => p.TimetableChangeRequestReviewedByNavigations)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -723,7 +744,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("timetable_slots_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Section).WithMany(p => p.TimetableSlots).HasConstraintName("timetable_slots_section_id_fkey");
 
@@ -740,7 +761,7 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("todos_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
 
             entity.HasOne(d => d.Student).WithMany(p => p.Todos).HasConstraintName("todos_student_id_fkey");
         });
@@ -749,9 +770,9 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("usage_telemetry_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Metadata).HasDefaultValueSql("'{}'::jsonb");
-            entity.Property(e => e.RecordedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Metadata).HasDefaultValueSql("N'{}'");
+            entity.Property(e => e.RecordedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.Assignment).WithMany(p => p.UsageTelemetries)
                 .OnDelete(DeleteBehavior.SetNull)
@@ -768,10 +789,10 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("users_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.Property(e => e.IsActive).HasDefaultValue(true);
-            entity.Property(e => e.AccountType).HasColumnType("account_type");
+            entity.Property(e => e.AccountType).HasConversion(EnumConverters.SnakeCase<AccountType>()).HasMaxLength(30);
 
             entity.HasOne(d => d.College).WithMany(p => p.Users)
                 .OnDelete(DeleteBehavior.Restrict)
@@ -788,10 +809,10 @@ public partial class AppDbContext : DbContext
 
             entity.HasIndex(e => e.UserId, "uniq_user_active_session")
                 .IsUnique()
-                .HasFilter("(is_active = true)");
+                .HasFilter("([is_active] = 1)");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.Property(e => e.IsActive).HasDefaultValue(true);
 
             // #92 — one user can have many historical (inactive) session rows; only the
@@ -805,8 +826,8 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("whitelist_requests_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Status).HasColumnType("whitelist_request_status");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.Status).HasConversion(EnumConverters.SnakeCase<WhitelistRequestStatus>()).HasMaxLength(30);
 
             entity.HasOne(d => d.RequestedByNavigation).WithMany(p => p.WhitelistRequestRequestedByNavigations).HasConstraintName("whitelist_requests_requested_by_fkey");
 
@@ -819,11 +840,38 @@ public partial class AppDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("whitelist_sites_pkey");
 
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.ApprovedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Id).HasDefaultValueSql("NEWID()");
+            entity.Property(e => e.ApprovedAt).HasDefaultValueSql("SYSUTCDATETIME()");
 
             entity.HasOne(d => d.College).WithMany(p => p.WhitelistSites).HasConstraintName("whitelist_sites_college_id_fkey");
         });
+
+        // Npgsql returned `timestamptz` columns as DateTime with Kind=Utc; SqlServer's
+        // `datetime2` round-trips as Kind=Unspecified. Every DateTime column here was always
+        // UTC in practice (see #152's college-local-time handling, which converts explicitly
+        // off of these), so restore Kind=Utc uniformly on read rather than relying on every
+        // call site to know that — a quiet Kind=Unspecified would silently break the
+        // attendance/fee-due-date "local calendar day" logic without any compile error.
+        var utcConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
+            v => v,
+            v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+        var nullableUtcConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime?, DateTime?>(
+            v => v,
+            v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v);
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            foreach (var property in entityType.GetProperties())
+            {
+                if (property.ClrType == typeof(DateTime))
+                {
+                    property.SetValueConverter(utcConverter);
+                }
+                else if (property.ClrType == typeof(DateTime?))
+                {
+                    property.SetValueConverter(nullableUtcConverter);
+                }
+            }
+        }
 
         OnModelCreatingPartial(modelBuilder);
     }

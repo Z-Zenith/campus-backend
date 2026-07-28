@@ -45,9 +45,18 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             CreatedBy = userId,
-            RestrictedYears = request.RestrictedYears,
-            RestrictedDepartments = request.RestrictedDepartments,
         };
+        // request.RestrictedYears/RestrictedDepartments stay `List<int>?`/`List<Guid>?` on the
+        // wire (CreateEventRequest, unchanged) — only the storage shape changed from a Postgres
+        // array column to a junction table (see Event.cs / AppDbContext.cs).
+        foreach (var year in request.RestrictedYears ?? [])
+        {
+            newEvent.RestrictedYears.Add(new EventRestrictedYear { Year = year });
+        }
+        foreach (var departmentId in request.RestrictedDepartments ?? [])
+        {
+            newEvent.RestrictedDepartments.Add(new EventRestrictedDepartment { DepartmentId = departmentId });
+        }
         db.Events.Add(newEvent);
         await db.SaveChangesAsync();
 
@@ -321,8 +330,8 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
 
     private IQueryable<Event> EligibleEventsQuery(Guid collegeId, Section section) =>
         db.Events.Where(e => e.CollegeId == collegeId &&
-            (e.RestrictedYears == null || e.RestrictedYears.Contains(section.Year)) &&
-            (e.RestrictedDepartments == null || e.RestrictedDepartments.Contains(section.DepartmentId)));
+            (!e.RestrictedYears.Any() || e.RestrictedYears.Any(ry => ry.Year == section.Year)) &&
+            (!e.RestrictedDepartments.Any() || e.RestrictedDepartments.Any(rd => rd.DepartmentId == section.DepartmentId)));
 
     private async Task<(User? Student, Section? Section)> CurrentStudentSectionAsync()
     {

@@ -34,7 +34,7 @@ public partial class Assignment
     [Column("submission_window_end")]
     public DateTime SubmissionWindowEnd { get; set; }
 
-    [Column("type_specific_settings", TypeName = "jsonb")]
+    [Column("type_specific_settings", TypeName = "nvarchar(max)")]
     public string? TypeSpecificSettings { get; set; }
 
     [InverseProperty("Assignment")]

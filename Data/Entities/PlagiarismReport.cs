@@ -22,7 +22,7 @@ public partial class PlagiarismReport
     [Column("copyleaks_scan_id")]
     public string? CopyleaksScanId { get; set; }
 
-    [Column("matched_sources", TypeName = "jsonb")]
+    [Column("matched_sources", TypeName = "nvarchar(max)")]
     public string? MatchedSources { get; set; }
 
     [Column("checked_at")]

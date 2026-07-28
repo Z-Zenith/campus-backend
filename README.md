@@ -1,8 +1,8 @@
 # Backend API
 
-ASP.NET Core / .NET 10 backend, database-first against PostgreSQL via EF Core
+ASP.NET Core / .NET 10 backend, database-first against Microsoft SQL Server via EF Core
 (`Data/Entities/*.cs` are scaffolded with `dotnet-ef dbcontext scaffold`, not
-hand-authored). See `db/README.md` for local Postgres setup and connection
+hand-authored). See `db/README.md` for local SQL Server setup and connection
 details, and `docs/campus-platform-db-api-schema.md` for the schema itself.
 
 ## `db/` and `backend-api` move together
@@ -17,7 +17,7 @@ made once EF migrations exist.
 ## Build & run
 
 ```bash
-docker compose up -d postgres   # or the full stack: docker compose up -d
+docker compose up -d mssql mssql-init   # or the full stack: docker compose up -d
 dotnet build
 dotnet run
 ```

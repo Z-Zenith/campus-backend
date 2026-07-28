@@ -19,7 +19,7 @@ public partial class Document
     [Column("file_url")]
     public string FileUrl { get; set; } = null!;
 
-    [Column("annotations", TypeName = "jsonb")]
+    [Column("annotations", TypeName = "nvarchar(max)")]
     public string? Annotations { get; set; }
 
     [Column("page_count")]

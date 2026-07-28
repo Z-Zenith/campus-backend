@@ -26,7 +26,7 @@ public partial class UsageTelemetry
     [Column("event_type")]
     public string EventType { get; set; } = null!;
 
-    [Column("metadata", TypeName = "jsonb")]
+    [Column("metadata", TypeName = "nvarchar(max)")]
     public string Metadata { get; set; } = null!;
 
     [Column("recorded_at")]

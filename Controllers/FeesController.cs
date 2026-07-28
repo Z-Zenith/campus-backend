@@ -175,10 +175,11 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
             .GroupBy(x => x.ParentUserId, x => x.Fee)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Npgsql requires DateTimeKind.Utc for a value bound to a `timestamptz` column
-        // (notifications.created_at) — DateOnly.ToDateTime() always yields Unspecified,
-        // which throws at execution time against real Postgres (invisible under the
-        // EF Core InMemory provider used in tests, which doesn't validate DateTimeKind).
+        // The `datetime2` column backing notifications.created_at is always treated as UTC
+        // (see AppDbContext's global UTC DateTime converter) — DateOnly.ToDateTime() always
+        // yields Unspecified, which would silently store a wrong-Kind value against a real
+        // SQL Server (invisible under the EF Core InMemory provider used in tests, which
+        // doesn't validate DateTimeKind).
         var todayStart = DateTime.SpecifyKind(today.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
 
         // Batched instead of one AnyAsync per parent — same N+1 concern as the join above.

@@ -17,7 +17,7 @@ public partial class Notification
     [Column("recipient_id")]
     public Guid RecipientId { get; set; }
 
-    [Column("payload", TypeName = "jsonb")]
+    [Column("payload", TypeName = "nvarchar(max)")]
     public string Payload { get; set; } = null!;
 
     [Column("created_at")]

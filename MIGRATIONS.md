@@ -1,8 +1,10 @@
 # Migration policy
 
 Today this project is database-first, not code-first: `db/init/*.sql` is hand
--written and is the schema's single source of truth, applied automatically by
-the `postgres` container on first boot (see `db/README.md`). `Data/Entities/*.cs`
+-written and is the schema's single source of truth, applied by the `mssql-init`
+sidecar against a fresh `mssql` container on first boot (see `db/README.md` —
+migrated off PostgreSQL, whose official image could apply these automatically;
+SQL Server has no equivalent, hence the sidecar). `Data/Entities/*.cs`
 is generated from that schema via `dotnet-ef dbcontext scaffold` and must never
 be hand-edited to a shape the SQL doesn't already have — re-scaffold instead.
 

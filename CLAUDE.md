@@ -13,21 +13,22 @@ of the split, not a bug.
 
 ## Tech stack
 
-ASP.NET Core, .NET 10 (LTS). PostgreSQL, EF Core database-first (`db/init/*.sql` is the schema
-source of truth; `Data/Entities/*.cs` is scaffolded from it via `dotnet-ef dbcontext scaffold`,
-never hand-edited to a different shape). RBAC is enforced directly in `Services/PermissionService.cs`
-against Postgres tables — OpenFGA (in `campus-platform`) is reference-only, not wired in.
+ASP.NET Core, .NET 10 (LTS). Microsoft SQL Server (migrated off PostgreSQL — see MIGRATIONS.md),
+EF Core database-first (`db/init/*.sql` is the schema source of truth; `Data/Entities/*.cs` is
+scaffolded from it via `dotnet-ef dbcontext scaffold`, never hand-edited to a different shape).
+RBAC is enforced directly in `Services/PermissionService.cs` against these tables — OpenFGA (in
+`campus-platform`) is reference-only, not wired in.
 
 ## Build & test
 
 ```bash
-docker compose up -d postgres   # from campus-platform, or point at any Postgres 16+
+docker compose up -d mssql mssql-init   # from campus-platform, or point at any SQL Server 2022+
 dotnet build
 dotnet run
 dotnet test BackendApi.Tests
 ```
 
-See `README.md` for local Postgres setup and `MIGRATIONS.md` for schema-change policy.
+See `db/README.md` for local SQL Server setup and `MIGRATIONS.md` for schema-change policy.
 
 ## SEK-01 code execution (`DockerCodeRunner`)
 

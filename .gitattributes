@@ -1,5 +1,6 @@
-# Shell scripts run inside Linux containers (Postgres docker-entrypoint-initdb.d) — a
-# CRLF checkout (e.g. Windows with core.autocrlf=true) corrupts `set -e` and other
-# lines enough that the script silently no-ops instead of erroring loudly, so this
-# must stay LF regardless of the checkout platform.
+# Shell scripts run inside Linux containers — a CRLF checkout (e.g. Windows with
+# core.autocrlf=true) corrupts `set -e` and other lines enough that the script silently
+# no-ops instead of erroring loudly, so this must stay LF regardless of the checkout platform.
+# (No .sh files exist in this repo as of the SQL Server migration — db/init/03_create_app_role.sh
+# was replaced by a .sql script — kept for any future one.)
 *.sh text eol=lf

@@ -22,10 +22,10 @@ public partial class AutogradeSuggestion
     [Column("confidence")]
     public decimal? Confidence { get; set; }
 
-    [Column("matched_criteria", TypeName = "jsonb")]
+    [Column("matched_criteria", TypeName = "nvarchar(max)")]
     public string? MatchedCriteria { get; set; }
 
-    [Column("feedback", TypeName = "jsonb")]
+    [Column("feedback", TypeName = "nvarchar(max)")]
     public string? Feedback { get; set; }
 
     [Column("confirmed_by_teacher")]

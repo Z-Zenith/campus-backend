@@ -1,621 +1,949 @@
--- Campus Platform — PostgreSQL schema
--- Mirrors docs/Schema.md Part 1.
--- Loaded automatically by the official postgres image via /docker-entrypoint-initdb.d.
+-- Campus Platform — SQL Server (T-SQL) schema
+-- Mirrors docs/Schema.md Part 1. Ported from the original PostgreSQL schema (git history) —
+-- see this repo's CLAUDE.md / MIGRATIONS.md for the database-first policy: this file is the
+-- schema's single source of truth, Data/Entities/*.cs is scaffolded from it.
+--
+-- Notable translation decisions from the Postgres original:
+--   * uuid -> UNIQUEIDENTIFIER, gen_random_uuid() -> NEWID()
+--   * text -> NVARCHAR(MAX), except columns used as a PRIMARY KEY or in a UNIQUE
+--     constraint/index (SQL Server disallows MAX-length key columns) — those get an explicit
+--     bounded NVARCHAR(n) instead (roles.code/permissions.code, users.identifier,
+--     whitelist_sites.url, subjects.code, code_files.path, payment_transactions.gateway_txn_id).
+--   * boolean -> BIT, true/false literals -> 1/0
+--   * timestamptz -> DATETIME2, now() -> SYSUTCDATETIME() (always UTC — see
+--     Data/AppDbContext.cs's global UTC DateTime converter for the app-side half of this)
+--   * jsonb -> NVARCHAR(MAX) (app already treats these columns as opaque JSON text, not a
+--     jsonb-typed value, so this is a lossless translation — no jsonb operators were used)
+--   * Postgres native ENUM types -> NVARCHAR(30) + CHECK constraint, since SQL Server has no
+--     enum type. Values are the same snake_case labels as before; Data/EnumConverters.cs
+--     reproduces the PascalCase<->snake_case mapping Npgsql used to do natively.
+--   * int[]/uuid[] columns (events.restricted_years/restricted_departments) -> junction
+--     tables (event_restricted_years/event_restricted_departments), since SQL Server has no
+--     array column type. See CalendarController.cs's EligibleEventsQuery for the query-side
+--     translation this required.
+--   * CREATE TABLE/INDEX IF NOT EXISTS -> IF NOT EXISTS (SELECT ... FROM sys.*) guards, since
+--     T-SQL has no direct equivalent syntax.
+--   * ON DELETE RESTRICT -> omitted (SQL Server's default FK behavior, NO ACTION, is already
+--     "block the delete if child rows exist").
+--
+-- Applied via the mssql-init sidecar in campus-platform/docker-compose.yml (mcr.microsoft.com/
+-- mssql/server has no docker-entrypoint-initdb.d equivalent to auto-run this on first boot,
+-- unlike the postgres image this replaces) — see db/README.md.
 
-BEGIN;
+-- Any error aborts the whole batch and rolls back the transaction below, rather than sqlcmd's
+-- default of continuing to the next GO-separated batch on error (which would otherwise leave
+-- a half-applied schema with no automatic rollback).
+SET XACT_ABORT ON;
+GO
 
--- ─── Extensions ────────────────────────────────────────────────────────────────
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";   -- gen_random_uuid()
+USE campus;
+GO
 
--- ─── Enums ─────────────────────────────────────────────────────────────────────
-DO $$ BEGIN
-    CREATE TYPE account_type AS ENUM ('student', 'teacher', 'admin_tier', 'parent');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE scope_kind AS ENUM ('global', 'department');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE attendance_status AS ENUM ('present', 'absent', 'late');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE assignment_type AS ENUM ('code', 'quiz', 'essay', 'file_upload');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE group_type AS ENUM ('class', 'subject_section', 'club', 'teacher_only');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE doc_type AS ENUM ('pdf', 'pptx', 'docx');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE notification_type AS ENUM (
-        'exit_ping', 'absence_ping', 'report', 'timetable_request',
-        'fee_reminder', 'whitelist_request', 'suspicious_flag'
-    );
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE fee_status AS ENUM ('pending', 'paid');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE whitelist_request_status AS ENUM ('pending', 'approved', 'rejected');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE ocr_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'not_applicable');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+BEGIN TRANSACTION;
 
 -- ─── 1.1 Tenancy & Identity ────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS colleges (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        text NOT NULL,
-    -- IANA time zone name (e.g. 'Asia/Kolkata'), used to derive "today"/session dates from
-    -- this college's local time rather than raw UTC (#152) -- attendance marking and fee
-    -- due-date checks must not roll over to the wrong calendar day near local midnight.
-    time_zone   text NOT NULL DEFAULT 'UTC',
-    created_at  timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'colleges' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.colleges (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        name        NVARCHAR(MAX) NOT NULL,
+        -- IANA time zone name (e.g. 'Asia/Kolkata'), used to derive "today"/session dates from
+        -- this college's local time rather than raw UTC (#152) -- attendance marking and fee
+        -- due-date checks must not roll over to the wrong calendar day near local midnight.
+        time_zone   NVARCHAR(100) NOT NULL DEFAULT 'UTC',
+        created_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS departments (
-    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id          uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
-    name                text NOT NULL,
-    hod_role_binding_id uuid  -- FK to role_bindings added after that table exists
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'departments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.departments (
+        id                  UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        college_id          UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.colleges(id) ON DELETE CASCADE,
+        name                NVARCHAR(MAX) NOT NULL,
+        hod_role_binding_id UNIQUEIDENTIFIER  -- FK to role_bindings added after that table exists
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS users (
-    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id      uuid NOT NULL REFERENCES colleges(id) ON DELETE RESTRICT,
-    account_type    account_type NOT NULL,
-    identifier      text NOT NULL,
-    password_hash   text NOT NULL,
-    totp_secret     text,                   -- encrypted at the application layer
-    full_name       text NOT NULL,
-    department_id   uuid REFERENCES departments(id) ON DELETE SET NULL,
-    date_of_birth   date,                   -- PRT-01: students only, used as the parent-login credential
-    is_active       boolean NOT NULL DEFAULT true,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (college_id, identifier)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'users' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.users (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        college_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.colleges(id),
+        account_type    NVARCHAR(30) NOT NULL
+                            CHECK (account_type IN ('student', 'teacher', 'admin_tier', 'parent')),
+        identifier      NVARCHAR(200) NOT NULL,
+        password_hash   NVARCHAR(MAX) NOT NULL,
+        totp_secret     NVARCHAR(MAX),          -- encrypted at the application layer
+        full_name       NVARCHAR(MAX) NOT NULL,
+        department_id   UNIQUEIDENTIFIER REFERENCES dbo.departments(id) ON DELETE SET NULL,
+        date_of_birth   DATE,                   -- PRT-01: students only, used as the parent-login credential
+        is_active       BIT NOT NULL DEFAULT 1,
+        created_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_users_college_identifier UNIQUE (college_id, identifier)
+    );
+END
+GO
 
 -- PRT-01/02/03: which parent account may view which student's data. A parent logs in with
 -- the ward's roll number + DOB (see AuthContracts/ParentController); this table is the
 -- authorization gate so knowing those two values isn't sufficient on its own — the student
 -- must already be registered as that parent's ward.
-CREATE TABLE IF NOT EXISTS parent_wards (
-    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    parent_user_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    student_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (parent_user_id, student_id)
-);
-CREATE INDEX IF NOT EXISTS idx_parent_wards_student
-    ON parent_wards (student_id);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'parent_wards' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.parent_wards (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        parent_user_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        student_id      UNIQUEIDENTIFIER NOT NULL,
+        created_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_parent_wards UNIQUE (parent_user_id, student_id),
+        CONSTRAINT parent_wards_student_id_fkey FOREIGN KEY (student_id) REFERENCES dbo.users(id) ON DELETE NO ACTION
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS permissions (
-    code        text PRIMARY KEY,
-    description text NOT NULL
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_parent_wards_student' AND object_id = OBJECT_ID('dbo.parent_wards'))
+BEGIN
+    CREATE INDEX idx_parent_wards_student ON dbo.parent_wards (student_id);
+END
+GO
 
-CREATE TABLE IF NOT EXISTS roles (
-    code                text PRIMARY KEY,
-    default_scope_kind  scope_kind NOT NULL
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'permissions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.permissions (
+        code        NVARCHAR(100) PRIMARY KEY,
+        description NVARCHAR(MAX) NOT NULL
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS role_default_permissions (
-    role_code        text NOT NULL REFERENCES roles(code) ON DELETE CASCADE,
-    permission_code  text NOT NULL REFERENCES permissions(code) ON DELETE CASCADE,
-    PRIMARY KEY (role_code, permission_code)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'roles' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.roles (
+        code                NVARCHAR(100) PRIMARY KEY,
+        default_scope_kind  NVARCHAR(30) NOT NULL CHECK (default_scope_kind IN ('global', 'department'))
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS role_bindings (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role_code     text NOT NULL REFERENCES roles(code) ON DELETE RESTRICT,
-    scope_type    scope_kind NOT NULL,
-    department_id uuid REFERENCES departments(id) ON DELETE RESTRICT,
-    granted_at    timestamptz NOT NULL DEFAULT now(),
-    CHECK (
-        (scope_type = 'department' AND department_id IS NOT NULL) OR
-        (scope_type = 'global'     AND department_id IS NULL)
-    )
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_default_permissions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.role_default_permissions (
+        role_code        NVARCHAR(100) NOT NULL REFERENCES dbo.roles(code) ON DELETE CASCADE,
+        permission_code  NVARCHAR(100) NOT NULL REFERENCES dbo.permissions(code) ON DELETE CASCADE,
+        PRIMARY KEY (role_code, permission_code)
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_bindings' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.role_bindings (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        user_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        role_code     NVARCHAR(100) NOT NULL REFERENCES dbo.roles(code),
+        scope_type    NVARCHAR(30) NOT NULL CHECK (scope_type IN ('global', 'department')),
+        department_id UNIQUEIDENTIFIER REFERENCES dbo.departments(id),
+        granted_at    DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CHECK (
+            (scope_type = 'department' AND department_id IS NOT NULL) OR
+            (scope_type = 'global'     AND department_id IS NULL)
+        )
+    );
+END
+GO
 
 -- Now that role_bindings exists, wire up departments.hod_role_binding_id
-DO $$ BEGIN
-    ALTER TABLE departments
+IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'departments_hod_fk')
+BEGIN
+    ALTER TABLE dbo.departments
         ADD CONSTRAINT departments_hod_fk
-        FOREIGN KEY (hod_role_binding_id) REFERENCES role_bindings(id) ON DELETE SET NULL;
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+        FOREIGN KEY (hod_role_binding_id) REFERENCES dbo.role_bindings(id) ON DELETE SET NULL;
+END
+GO
 
-CREATE TABLE IF NOT EXISTS permission_grants (
-    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    permission_code text NOT NULL REFERENCES permissions(code) ON DELETE CASCADE,
-    granted         boolean NOT NULL,             -- true = additive, false = explicit revoke
-    expires_at      timestamptz,
-    granted_by      uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    created_at      timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_permission_grants_user
-    ON permission_grants (user_id, permission_code);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'permission_grants' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.permission_grants (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        user_id         UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        permission_code NVARCHAR(100) NOT NULL REFERENCES dbo.permissions(code) ON DELETE CASCADE,
+        granted         BIT NOT NULL,             -- true = additive, false = explicit revoke
+        expires_at      DATETIME2,
+        granted_by      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        created_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS user_sessions (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    device_info text,
-    is_active   boolean NOT NULL DEFAULT true,   -- API-01: one active row per user
-    created_at  timestamptz NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_user_active_session
-    ON user_sessions (user_id) WHERE is_active = true;
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user
-    ON user_sessions (user_id);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_permission_grants_user' AND object_id = OBJECT_ID('dbo.permission_grants'))
+BEGIN
+    CREATE INDEX idx_permission_grants_user ON dbo.permission_grants (user_id, permission_code);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'user_sessions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.user_sessions (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        user_id     UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        device_info NVARCHAR(MAX),
+        is_active   BIT NOT NULL DEFAULT 1,   -- API-01: one active row per user
+        created_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'uniq_user_active_session' AND object_id = OBJECT_ID('dbo.user_sessions'))
+BEGIN
+    CREATE UNIQUE INDEX uniq_user_active_session ON dbo.user_sessions (user_id) WHERE is_active = 1;
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_user_sessions_user' AND object_id = OBJECT_ID('dbo.user_sessions'))
+BEGIN
+    CREATE INDEX idx_user_sessions_user ON dbo.user_sessions (user_id);
+END
+GO
 
 -- ─── 1.2 Academic Structure ───────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS subjects (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    department_id uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
-    code          text NOT NULL,
-    name          text NOT NULL,
-    teacher_id    uuid REFERENCES users(id) ON DELETE SET NULL,
-    UNIQUE (department_id, code)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'subjects' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.subjects (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        department_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.departments(id) ON DELETE CASCADE,
+        code          NVARCHAR(50) NOT NULL,
+        name          NVARCHAR(MAX) NOT NULL,
+        teacher_id    UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL,
+        CONSTRAINT uniq_subjects_dept_code UNIQUE (department_id, code)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS sections (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    department_id uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
-    year          int  NOT NULL,
-    name          text NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sections_dept_year
-    ON sections (department_id, year);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'sections' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.sections (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        department_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.departments(id) ON DELETE CASCADE,
+        year          INT NOT NULL,
+        name          NVARCHAR(MAX) NOT NULL
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS section_enrollments (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    section_id uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    UNIQUE (section_id, student_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_sections_dept_year' AND object_id = OBJECT_ID('dbo.sections'))
+BEGIN
+    CREATE INDEX idx_sections_dept_year ON dbo.sections (department_id, year);
+END
+GO
 
-CREATE TABLE IF NOT EXISTS teacher_section_assignments (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    teacher_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    section_id uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    subject_id uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-    UNIQUE (teacher_id, section_id, subject_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'section_enrollments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.section_enrollments (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        section_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.sections(id) ON DELETE CASCADE,
+        student_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT uniq_section_enrollments UNIQUE (section_id, student_id)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS timetable_slots (
-    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    section_id      uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    subject_id      uuid NOT NULL REFERENCES subjects(id) ON DELETE RESTRICT,
-    teacher_id      uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    day_of_week     int  NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-    start_time      time NOT NULL,
-    end_time        time NOT NULL,
-    room            text,
-    manually_edited boolean NOT NULL DEFAULT false,
-    CHECK (end_time > start_time)
-);
-CREATE INDEX IF NOT EXISTS idx_timetable_slots_section
-    ON timetable_slots (section_id, day_of_week, start_time);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'teacher_section_assignments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.teacher_section_assignments (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        teacher_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        section_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.sections(id) ON DELETE CASCADE,
+        subject_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.subjects(id) ON DELETE CASCADE,
+        CONSTRAINT uniq_teacher_section_assignments UNIQUE (teacher_id, section_id, subject_id)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS class_sessions (
-    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    timetable_slot_id  uuid NOT NULL REFERENCES timetable_slots(id) ON DELETE CASCADE,
-    session_date       date NOT NULL,
-    actual_teacher_id  uuid REFERENCES users(id) ON DELETE SET NULL,
-    UNIQUE (timetable_slot_id, session_date)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'timetable_slots' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.timetable_slots (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        section_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.sections(id) ON DELETE CASCADE,
+        subject_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.subjects(id),
+        teacher_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        day_of_week     INT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+        start_time      TIME NOT NULL,
+        end_time        TIME NOT NULL,
+        room            NVARCHAR(MAX),
+        manually_edited BIT NOT NULL DEFAULT 0,
+        CHECK (end_time > start_time)
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_timetable_slots_section' AND object_id = OBJECT_ID('dbo.timetable_slots'))
+BEGIN
+    CREATE INDEX idx_timetable_slots_section ON dbo.timetable_slots (section_id, day_of_week, start_time);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'class_sessions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.class_sessions (
+        id                 UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        timetable_slot_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.timetable_slots(id) ON DELETE CASCADE,
+        session_date       DATE NOT NULL,
+        actual_teacher_id  UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL,
+        CONSTRAINT uniq_class_sessions UNIQUE (timetable_slot_id, session_date)
+    );
+END
+GO
 
 -- ─── 1.3 Attendance ───────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS attendance_records (
-    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    class_session_id uuid NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
-    student_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status           attendance_status NOT NULL,
-    marked_at        timestamptz NOT NULL DEFAULT now(),
-    marked_by        uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    UNIQUE (class_session_id, student_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'attendance_records' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.attendance_records (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        class_session_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.class_sessions(id) ON DELETE CASCADE,
+        student_id       UNIQUEIDENTIFIER NOT NULL,
+        status           NVARCHAR(30) NOT NULL CHECK (status IN ('present', 'absent', 'late')),
+        marked_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        marked_by        UNIQUEIDENTIFIER NOT NULL,
+        CONSTRAINT uniq_attendance_records UNIQUE (class_session_id, student_id),
+        CONSTRAINT attendance_records_student_id_fkey FOREIGN KEY (student_id) REFERENCES dbo.users(id) ON DELETE NO ACTION,
+        CONSTRAINT attendance_records_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES dbo.users(id) ON DELETE NO ACTION
+    );
+END
+GO
 
 -- ─── 1.4 Assignments & Submissions ────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS assignments (
-    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    subject_id               uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-    teacher_id               uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    type                     assignment_type NOT NULL,
-    title                    text NOT NULL,
-    description              text,
-    due_date                 timestamptz NOT NULL,
-    submission_window_start  timestamptz NOT NULL,
-    submission_window_end    timestamptz NOT NULL,
-    type_specific_settings   jsonb,
-    CHECK (submission_window_end >= submission_window_start)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'assignments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.assignments (
+        id                       UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        subject_id               UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.subjects(id) ON DELETE CASCADE,
+        teacher_id               UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        type                     NVARCHAR(30) NOT NULL CHECK (type IN ('code', 'quiz', 'essay', 'file_upload')),
+        title                    NVARCHAR(MAX) NOT NULL,
+        description              NVARCHAR(MAX),
+        due_date                 DATETIME2 NOT NULL,
+        submission_window_start  DATETIME2 NOT NULL,
+        submission_window_end    DATETIME2 NOT NULL,
+        type_specific_settings   NVARCHAR(MAX),
+        CHECK (submission_window_end >= submission_window_start)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS submissions (
-    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    assignment_id     uuid NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-    student_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    content_url       text NOT NULL,
-    submitted_at      timestamptz NOT NULL DEFAULT now(),
-    is_late           boolean NOT NULL DEFAULT false,
-    is_autosubmitted  boolean NOT NULL DEFAULT false
-);
-CREATE INDEX IF NOT EXISTS idx_submissions_assignment
-    ON submissions (assignment_id, student_id);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'submissions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.submissions (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        assignment_id     UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.assignments(id) ON DELETE CASCADE,
+        student_id        UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        content_url       NVARCHAR(MAX) NOT NULL,
+        submitted_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        is_late           BIT NOT NULL DEFAULT 0,
+        is_autosubmitted  BIT NOT NULL DEFAULT 0
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS plagiarism_reports (
-    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    submission_id      uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-    similarity_score   numeric NOT NULL,
-    copyleaks_scan_id  text,
-    matched_sources    jsonb,
-    checked_at         timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_submissions_assignment' AND object_id = OBJECT_ID('dbo.submissions'))
+BEGIN
+    CREATE INDEX idx_submissions_assignment ON dbo.submissions (assignment_id, student_id);
+END
+GO
 
-CREATE TABLE IF NOT EXISTS copy_check_flags (
-    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    submission_a_id   uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-    submission_b_id   uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-    similarity_score  numeric NOT NULL,
-    flagged_at        timestamptz NOT NULL DEFAULT now(),
-    CHECK (similarity_score >= 90),
-    CHECK (submission_a_id <> submission_b_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'plagiarism_reports' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.plagiarism_reports (
+        id                 UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        submission_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.submissions(id) ON DELETE CASCADE,
+        similarity_score   DECIMAL(10,4) NOT NULL,
+        copyleaks_scan_id  NVARCHAR(MAX),
+        matched_sources    NVARCHAR(MAX),
+        checked_at         DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS ai_detection_reports (
-    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    submission_id       uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-    ai_likelihood_score numeric NOT NULL,
-    pangram_report_id   text,
-    checked_at          timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'copy_check_flags' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.copy_check_flags (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        submission_a_id   UNIQUEIDENTIFIER NOT NULL,
+        submission_b_id   UNIQUEIDENTIFIER NOT NULL,
+        similarity_score  DECIMAL(10,4) NOT NULL,
+        flagged_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CHECK (similarity_score >= 90),
+        CHECK (submission_a_id <> submission_b_id),
+        CONSTRAINT copy_check_flags_submission_a_id_fkey FOREIGN KEY (submission_a_id) REFERENCES dbo.submissions(id) ON DELETE NO ACTION,
+        CONSTRAINT copy_check_flags_submission_b_id_fkey FOREIGN KEY (submission_b_id) REFERENCES dbo.submissions(id) ON DELETE NO ACTION
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ai_detection_reports' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.ai_detection_reports (
+        id                  UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        submission_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.submissions(id) ON DELETE CASCADE,
+        ai_likelihood_score DECIMAL(10,4) NOT NULL,
+        pangram_report_id   NVARCHAR(MAX),
+        checked_at          DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
 -- 2026-07-09 (#91): added confidence/matched_criteria/feedback so AIS-04's advisory
 -- signal ("never rubber-stamp, always show confidence") has somewhere to land — see
 -- services/ai-services/src/autograde.py's AutogradeSuggestion TypedDict for the shape
 -- these mirror. Additive only; no existing column touched. DB SCHEMA CONTRACT CHANGE —
 -- requires Track 1/Track 2 sign-off per CLAUDE.md before merge.
-CREATE TABLE IF NOT EXISTS autograde_suggestions (
-    id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    submission_id          uuid NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
-    suggested_grade        numeric NOT NULL,
-    confidence             numeric,
-    matched_criteria       jsonb,
-    feedback               jsonb,
-    confirmed_by_teacher   boolean NOT NULL DEFAULT false,
-    confirmed_at           timestamptz
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'autograde_suggestions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.autograde_suggestions (
+        id                     UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        submission_id          UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.submissions(id) ON DELETE CASCADE,
+        suggested_grade        DECIMAL(10,4) NOT NULL,
+        confidence             DECIMAL(10,4),
+        matched_criteria       NVARCHAR(MAX),
+        feedback               NVARCHAR(MAX),
+        confirmed_by_teacher   BIT NOT NULL DEFAULT 0,
+        confirmed_at           DATETIME2
+    );
+END
+GO
 
 -- ─── 1.5 Marks ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS internal_marks (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    subject_id    uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-    assignment_id uuid REFERENCES assignments(id) ON DELETE SET NULL,
-    marks         numeric NOT NULL,
-    published     boolean NOT NULL DEFAULT false,
-    published_at  timestamptz,
-    published_by  uuid REFERENCES users(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_internal_marks_student_subject
-    ON internal_marks (student_id, subject_id);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'internal_marks' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.internal_marks (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        subject_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.subjects(id) ON DELETE CASCADE,
+        assignment_id UNIQUEIDENTIFIER REFERENCES dbo.assignments(id) ON DELETE SET NULL,
+        marks         DECIMAL(10,4) NOT NULL,
+        published     BIT NOT NULL DEFAULT 0,
+        published_at  DATETIME2,
+        published_by  UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS external_marks (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    subject_id    uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-    grade         text NOT NULL,
-    submitted_by  uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    submitted_at  timestamptz NOT NULL DEFAULT now(),
-    approved      boolean NOT NULL DEFAULT false,
-    approved_by   uuid REFERENCES users(id) ON DELETE SET NULL,
-    approved_at   timestamptz,
-    published     boolean NOT NULL DEFAULT false,
-    CHECK (
-        (approved = false AND approved_by IS NULL AND approved_at IS NULL) OR
-        (approved = true  AND approved_by IS NOT NULL AND approved_at IS NOT NULL)
-    ),
-    CHECK (published = false OR approved = true)  -- can only publish once approved
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_internal_marks_student_subject' AND object_id = OBJECT_ID('dbo.internal_marks'))
+BEGIN
+    CREATE INDEX idx_internal_marks_student_subject ON dbo.internal_marks (student_id, subject_id);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'external_marks' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.external_marks (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id    UNIQUEIDENTIFIER NOT NULL,
+        subject_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.subjects(id) ON DELETE CASCADE,
+        grade         NVARCHAR(MAX) NOT NULL,
+        submitted_by  UNIQUEIDENTIFIER NOT NULL,
+        submitted_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        approved      BIT NOT NULL DEFAULT 0,
+        approved_by   UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL,
+        approved_at   DATETIME2,
+        published     BIT NOT NULL DEFAULT 0,
+        CHECK (
+            (approved = 0 AND approved_by IS NULL AND approved_at IS NULL) OR
+            (approved = 1 AND approved_by IS NOT NULL AND approved_at IS NOT NULL)
+        ),
+        CHECK (published = 0 OR approved = 1),  -- can only publish once approved
+        CONSTRAINT external_marks_student_id_fkey FOREIGN KEY (student_id) REFERENCES dbo.users(id) ON DELETE NO ACTION,
+        CONSTRAINT external_marks_submitted_by_fkey FOREIGN KEY (submitted_by) REFERENCES dbo.users(id) ON DELETE NO ACTION
+    );
+END
+GO
 
 -- ─── 1.6 Community ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS groups (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
-    type        group_type NOT NULL,
-    name        text NOT NULL,
-    created_by  uuid REFERENCES users(id) ON DELETE SET NULL,
-    section_id  uuid REFERENCES sections(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_groups_college ON groups (college_id);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'groups' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.groups (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        college_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.colleges(id) ON DELETE CASCADE,
+        type        NVARCHAR(30) NOT NULL CHECK (type IN ('class', 'subject_section', 'club', 'teacher_only')),
+        name        NVARCHAR(MAX) NOT NULL,
+        created_by  UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL,
+        section_id  UNIQUEIDENTIFIER REFERENCES dbo.sections(id) ON DELETE SET NULL
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS group_members (
-    id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id  uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    joined_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (group_id, user_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_groups_college' AND object_id = OBJECT_ID('dbo.groups'))
+BEGIN
+    CREATE INDEX idx_groups_college ON dbo.groups (college_id);
+END
+GO
 
-CREATE TABLE IF NOT EXISTS group_posts (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id   uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    author_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    content    text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_group_posts_group
-    ON group_posts (group_id, created_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'group_members' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.group_members (
+        id        UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        group_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.groups(id) ON DELETE CASCADE,
+        user_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        joined_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_group_members UNIQUE (group_id, user_id)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS materials (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    subject_id   uuid REFERENCES subjects(id) ON DELETE SET NULL,
-    group_id     uuid REFERENCES groups(id) ON DELETE SET NULL,
-    uploaded_by  uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    file_url     text NOT NULL,
-    title        text NOT NULL,
-    uploaded_at  timestamptz NOT NULL DEFAULT now(),
-    CHECK (subject_id IS NOT NULL OR group_id IS NOT NULL)  -- attached to one or both
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'group_posts' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.group_posts (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        group_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.groups(id) ON DELETE CASCADE,
+        author_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        content    NVARCHAR(MAX) NOT NULL,
+        created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_group_posts_group' AND object_id = OBJECT_ID('dbo.group_posts'))
+BEGIN
+    CREATE INDEX idx_group_posts_group ON dbo.group_posts (group_id, created_at DESC);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'materials' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.materials (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        subject_id   UNIQUEIDENTIFIER REFERENCES dbo.subjects(id) ON DELETE SET NULL,
+        group_id     UNIQUEIDENTIFIER REFERENCES dbo.groups(id) ON DELETE SET NULL,
+        uploaded_by  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        file_url     NVARCHAR(MAX) NOT NULL,
+        title        NVARCHAR(MAX) NOT NULL,
+        uploaded_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CHECK (subject_id IS NOT NULL OR group_id IS NOT NULL)  -- attached to one or both
+    );
+END
+GO
 
 -- ─── 1.7 Calendar & Events ────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS events (
-    id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id             uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
-    title                  text NOT NULL,
-    start_time             timestamptz NOT NULL,
-    end_time               timestamptz NOT NULL,
-    created_by             uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    restricted_years       int[],
-    restricted_departments uuid[],
-    CHECK (end_time > start_time)
-);
-CREATE INDEX IF NOT EXISTS idx_events_college_time
-    ON events (college_id, start_time);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'events' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.events (
+        id                     UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        college_id             UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.colleges(id) ON DELETE CASCADE,
+        title                  NVARCHAR(MAX) NOT NULL,
+        start_time             DATETIME2 NOT NULL,
+        end_time               DATETIME2 NOT NULL,
+        created_by             UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        CHECK (end_time > start_time)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS event_registrations (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id      uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    student_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    registered_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (event_id, student_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_events_college_time' AND object_id = OBJECT_ID('dbo.events'))
+BEGIN
+    CREATE INDEX idx_events_college_time ON dbo.events (college_id, start_time);
+END
+GO
 
-CREATE TABLE IF NOT EXISTS todos (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title      text NOT NULL,
-    due_date   timestamptz,
-    completed  boolean NOT NULL DEFAULT false
-);
+-- No array column type in SQL Server — these were events.restricted_years int[] /
+-- restricted_departments uuid[] under Postgres. See Data/Entities/Event.cs and
+-- CalendarController.cs's EligibleEventsQuery for the EF-side translation.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'event_restricted_years' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.event_restricted_years (
+        event_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.events(id) ON DELETE CASCADE,
+        year      INT NOT NULL,
+        PRIMARY KEY (event_id, year)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS custom_calendar_entries (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title      text NOT NULL,
-    entry_date date NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_custom_calendar_student
-    ON custom_calendar_entries (student_id, entry_date);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'event_restricted_departments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.event_restricted_departments (
+        event_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.events(id) ON DELETE CASCADE,
+        department_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.departments(id) ON DELETE CASCADE,
+        PRIMARY KEY (event_id, department_id)
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'event_registrations' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.event_registrations (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        event_id      UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.events(id) ON DELETE CASCADE,
+        student_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        registered_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_event_registrations UNIQUE (event_id, student_id)
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'todos' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.todos (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        title      NVARCHAR(MAX) NOT NULL,
+        due_date   DATETIME2,
+        completed  BIT NOT NULL DEFAULT 0
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'custom_calendar_entries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.custom_calendar_entries (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        title      NVARCHAR(MAX) NOT NULL,
+        entry_date DATE NOT NULL
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_custom_calendar_student' AND object_id = OBJECT_ID('dbo.custom_calendar_entries'))
+BEGIN
+    CREATE INDEX idx_custom_calendar_student ON dbo.custom_calendar_entries (student_id, entry_date);
+END
+GO
 
 -- ─── 1.8 Browser & Whitelist ─────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS whitelist_sites (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
-    url         text NOT NULL,
-    approved_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (college_id, url)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'whitelist_sites' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.whitelist_sites (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        college_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.colleges(id) ON DELETE CASCADE,
+        url         NVARCHAR(400) NOT NULL,
+        approved_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_whitelist_sites UNIQUE (college_id, url)
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS whitelist_requests (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    url           text NOT NULL,
-    requested_by  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status        whitelist_request_status NOT NULL DEFAULT 'pending',
-    reviewed_by   uuid REFERENCES users(id) ON DELETE SET NULL
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'whitelist_requests' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.whitelist_requests (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        url           NVARCHAR(MAX) NOT NULL,
+        requested_by  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        status        NVARCHAR(30) NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending', 'approved', 'rejected')),
+        reviewed_by   UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL
+    );
+END
+GO
 
 -- AIS-01: raw per-visit log the browsing summary is generated from — distinct from
 -- browsing_history_summaries below, which stores the generated summary text itself.
-CREATE TABLE IF NOT EXISTS browsing_history (
-    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    url              text NOT NULL,
-    visited_at       timestamptz NOT NULL DEFAULT now(),
-    duration_seconds integer
-);
-CREATE INDEX IF NOT EXISTS idx_browsing_history_student_time
-    ON browsing_history (student_id, visited_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'browsing_history' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.browsing_history (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        url              NVARCHAR(MAX) NOT NULL,
+        visited_at       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        duration_seconds INT
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS browsing_history_summaries (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    summary_text  text NOT NULL,
-    generated_at  timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_browsing_history_student_time' AND object_id = OBJECT_ID('dbo.browsing_history'))
+BEGIN
+    CREATE INDEX idx_browsing_history_student_time ON dbo.browsing_history (student_id, visited_at DESC);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'browsing_history_summaries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.browsing_history_summaries (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        summary_text  NVARCHAR(MAX) NOT NULL,
+        generated_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
 -- ─── 1.9 Shared Editor Kit (metadata only) ───────────────────────────────────
-CREATE TABLE IF NOT EXISTS notes (
-    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    title            text NOT NULL,
-    content_markdown text NOT NULL DEFAULT '',
-    created_at       timestamptz NOT NULL DEFAULT now(),
-    updated_at       timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notes' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.notes (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        owner_id         UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        title            NVARCHAR(MAX) NOT NULL,
+        content_markdown NVARCHAR(MAX) NOT NULL DEFAULT '',
+        created_at       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS note_links (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    from_note_id uuid NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    to_note_id   uuid NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    anchor       text NOT NULL,
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (from_note_id, to_note_id),
-    CHECK (from_note_id <> to_note_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'note_links' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.note_links (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        from_note_id UNIQUEIDENTIFIER NOT NULL,
+        to_note_id   UNIQUEIDENTIFIER NOT NULL,
+        anchor       NVARCHAR(MAX) NOT NULL,
+        created_at   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_note_links UNIQUE (from_note_id, to_note_id),
+        CHECK (from_note_id <> to_note_id),
+        CONSTRAINT note_links_from_note_id_fkey FOREIGN KEY (from_note_id) REFERENCES dbo.notes(id) ON DELETE CASCADE,
+        CONSTRAINT note_links_to_note_id_fkey FOREIGN KEY (to_note_id) REFERENCES dbo.notes(id) ON DELETE NO ACTION
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS documents (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    file_url    text NOT NULL,
-    doc_type    doc_type NOT NULL,
-    annotations jsonb,
-    page_count  int,
-    ocr_status  ocr_status NOT NULL DEFAULT 'pending'
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'documents' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.documents (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        owner_id    UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        file_url    NVARCHAR(MAX) NOT NULL,
+        doc_type    NVARCHAR(30) NOT NULL CHECK (doc_type IN ('pdf', 'pptx', 'docx')),
+        annotations NVARCHAR(MAX),
+        page_count  INT,
+        ocr_status  NVARCHAR(30) NOT NULL DEFAULT 'pending'
+                        CHECK (ocr_status IN ('pending', 'processing', 'completed', 'failed', 'not_applicable'))
+    );
+END
+GO
 
 -- SEK-01: a student's multi-file code project. `language` is plain text (validated
 -- app-side by campus-shared-editor-kit's isSupportedLanguage), not an enum like doc_type/
 -- ocr_status above — the SEK-01 launch list is expected to grow, and that runtime guard
--- already owns this validation, so a Postgres enum here would just be a second, more
+-- already owns this validation, so a CHECK constraint here would just be a second, more
 -- disruptive-to-extend copy of the same check.
-CREATE TABLE IF NOT EXISTS code_projects (
-    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id          uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name              text NOT NULL,
-    entry_file_path   text NOT NULL,
-    active_file_path  text NOT NULL,
-    stdin             text NOT NULL DEFAULT '',
-    created_at        timestamptz NOT NULL DEFAULT now(),
-    updated_at        timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_code_projects_owner_updated
-    ON code_projects (owner_id, updated_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'code_projects' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.code_projects (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        owner_id          UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        name              NVARCHAR(MAX) NOT NULL,
+        entry_file_path   NVARCHAR(MAX) NOT NULL,
+        active_file_path  NVARCHAR(MAX) NOT NULL,
+        stdin             NVARCHAR(MAX) NOT NULL DEFAULT '',
+        created_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at        DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS code_files (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id  uuid NOT NULL REFERENCES code_projects(id) ON DELETE CASCADE,
-    path        text NOT NULL,
-    language    text NOT NULL,
-    content     text NOT NULL DEFAULT '',
-    created_at  timestamptz NOT NULL DEFAULT now(),
-    updated_at  timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (project_id, path)
-);
-CREATE INDEX IF NOT EXISTS idx_code_files_project ON code_files (project_id);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_code_projects_owner_updated' AND object_id = OBJECT_ID('dbo.code_projects'))
+BEGIN
+    CREATE INDEX idx_code_projects_owner_updated ON dbo.code_projects (owner_id, updated_at DESC);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'code_files' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.code_files (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        project_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.code_projects(id) ON DELETE CASCADE,
+        path        NVARCHAR(400) NOT NULL,
+        language    NVARCHAR(MAX) NOT NULL,
+        content     NVARCHAR(MAX) NOT NULL DEFAULT '',
+        created_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_code_files UNIQUE (project_id, path)
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_code_files_project' AND object_id = OBJECT_ID('dbo.code_files'))
+BEGIN
+    CREATE INDEX idx_code_files_project ON dbo.code_files (project_id);
+END
+GO
 
 -- ─── 1.10 Direct Messaging ───────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS message_threads (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    teacher_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (student_id, teacher_id)
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'message_threads' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.message_threads (
+        id         UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        teacher_id UNIQUEIDENTIFIER NOT NULL,
+        created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_message_threads UNIQUE (student_id, teacher_id),
+        CONSTRAINT message_threads_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES dbo.users(id) ON DELETE NO ACTION
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS messages (
-    id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    thread_id uuid NOT NULL REFERENCES message_threads(id) ON DELETE CASCADE,
-    sender_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    content   text NOT NULL,
-    sent_at   timestamptz NOT NULL DEFAULT now(),
-    read_at   timestamptz
-);
-CREATE INDEX IF NOT EXISTS idx_messages_thread
-    ON messages (thread_id, sent_at);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'messages' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.messages (
+        id        UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        thread_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.message_threads(id) ON DELETE CASCADE,
+        sender_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id),
+        content   NVARCHAR(MAX) NOT NULL,
+        sent_at   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        read_at   DATETIME2
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_messages_thread' AND object_id = OBJECT_ID('dbo.messages'))
+BEGIN
+    CREATE INDEX idx_messages_thread ON dbo.messages (thread_id, sent_at);
+END
+GO
 
 -- ─── 1.11 Notifications ──────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS notifications (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    recipient_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    type         notification_type NOT NULL,
-    payload      jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    read_at      timestamptz
-);
-CREATE INDEX IF NOT EXISTS idx_notifications_recipient
-    ON notifications (recipient_id, created_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notifications' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.notifications (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        recipient_id UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        type         NVARCHAR(30) NOT NULL CHECK (type IN (
+                         'exit_ping', 'absence_ping', 'report', 'timetable_request',
+                         'fee_reminder', 'whitelist_request', 'suspicious_flag'
+                     )),
+        payload      NVARCHAR(MAX) NOT NULL DEFAULT N'{}',
+        created_at   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        read_at      DATETIME2
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_notifications_recipient' AND object_id = OBJECT_ID('dbo.notifications'))
+BEGIN
+    CREATE INDEX idx_notifications_recipient ON dbo.notifications (recipient_id, created_at DESC);
+END
+GO
 
 -- ─── 1.12 Reports & Feedback ─────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS teacher_reports (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    teacher_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    section_id   uuid REFERENCES sections(id) ON DELETE SET NULL,
-    student_id   uuid REFERENCES users(id) ON DELETE SET NULL,
-    content      text NOT NULL,
-    submitted_at timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'teacher_reports' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.teacher_reports (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        teacher_id   UNIQUEIDENTIFIER NOT NULL,
+        section_id   UNIQUEIDENTIFIER REFERENCES dbo.sections(id) ON DELETE SET NULL,
+        student_id   UNIQUEIDENTIFIER,
+        content      NVARCHAR(MAX) NOT NULL,
+        submitted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT teacher_reports_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT teacher_reports_student_id_fkey FOREIGN KEY (student_id) REFERENCES dbo.users(id) ON DELETE SET NULL
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS section_feedback (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    teacher_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    section_id   uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    rating       int  NOT NULL CHECK (rating BETWEEN 1 AND 5),
-    comments     text,
-    submitted_at timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'section_feedback' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.section_feedback (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        teacher_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        section_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.sections(id) ON DELETE CASCADE,
+        rating       INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comments     NVARCHAR(MAX),
+        submitted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS teacher_feedback (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    teacher_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    rating       int  NOT NULL CHECK (rating BETWEEN 1 AND 5),
-    comments     text,
-    submitted_at timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'teacher_feedback' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.teacher_feedback (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id   UNIQUEIDENTIFIER NOT NULL,
+        teacher_id   UNIQUEIDENTIFIER NOT NULL,
+        rating       INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comments     NVARCHAR(MAX),
+        submitted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT teacher_feedback_student_id_fkey FOREIGN KEY (student_id) REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT teacher_feedback_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES dbo.users(id) ON DELETE NO ACTION
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS timetable_change_requests (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    teacher_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    description  text NOT NULL,
-    status       text NOT NULL DEFAULT 'pending',
-    requested_at timestamptz NOT NULL DEFAULT now(),
-    reviewed_by  uuid REFERENCES users(id) ON DELETE SET NULL
-);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'timetable_change_requests' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.timetable_change_requests (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        teacher_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        description  NVARCHAR(MAX) NOT NULL,
+        status       NVARCHAR(MAX) NOT NULL DEFAULT 'pending',
+        requested_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        reviewed_by  UNIQUEIDENTIFIER REFERENCES dbo.users(id) ON DELETE SET NULL
+    );
+END
+GO
 
 -- ─── 1.13 Fees ───────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS fee_records (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    amount       numeric NOT NULL,
-    due_date     date NOT NULL,
-    status       fee_status NOT NULL DEFAULT 'pending',
-    payment_link text,
-    paid_at      timestamptz
-);
-CREATE INDEX IF NOT EXISTS idx_fee_records_student
-    ON fee_records (student_id, status);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'fee_records' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.fee_records (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id   UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        amount       DECIMAL(12,2) NOT NULL,
+        due_date     DATE NOT NULL,
+        status       NVARCHAR(30) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid')),
+        payment_link NVARCHAR(MAX),
+        paid_at      DATETIME2
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS payment_transactions (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    fee_record_id uuid NOT NULL REFERENCES fee_records(id) ON DELETE CASCADE,
-    gateway_txn_id text NOT NULL UNIQUE,
-    status        text NOT NULL,
-    processed_at  timestamptz NOT NULL DEFAULT now()
-);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_fee_records_student' AND object_id = OBJECT_ID('dbo.fee_records'))
+BEGIN
+    CREATE INDEX idx_fee_records_student ON dbo.fee_records (student_id, status);
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'payment_transactions' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.payment_transactions (
+        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        fee_record_id  UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.fee_records(id) ON DELETE CASCADE,
+        gateway_txn_id NVARCHAR(200) NOT NULL,
+        status         NVARCHAR(MAX) NOT NULL,
+        processed_at   DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT uniq_payment_transactions_gateway_txn_id UNIQUE (gateway_txn_id)
+    );
+END
+GO
 
 -- ─── 1.14 Suspicious Behaviour ───────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS usage_telemetry (
-    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    class_session_id uuid REFERENCES class_sessions(id) ON DELETE SET NULL,
-    assignment_id    uuid REFERENCES assignments(id) ON DELETE SET NULL,
-    event_type       text NOT NULL,
-    metadata         jsonb NOT NULL DEFAULT '{}'::jsonb,
-    recorded_at      timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_usage_telemetry_student_time
-    ON usage_telemetry (student_id, recorded_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'usage_telemetry' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.usage_telemetry (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        class_session_id UNIQUEIDENTIFIER REFERENCES dbo.class_sessions(id) ON DELETE SET NULL,
+        assignment_id    UNIQUEIDENTIFIER REFERENCES dbo.assignments(id) ON DELETE SET NULL,
+        event_type       NVARCHAR(MAX) NOT NULL,
+        metadata         NVARCHAR(MAX) NOT NULL DEFAULT N'{}',
+        recorded_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
 
-CREATE TABLE IF NOT EXISTS suspicious_flags (
-    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    class_session_id uuid REFERENCES class_sessions(id) ON DELETE SET NULL,
-    assignment_id    uuid REFERENCES assignments(id) ON DELETE SET NULL,
-    confidence_score numeric NOT NULL,
-    flagged_at       timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_suspicious_flags_student
-    ON suspicious_flags (student_id, flagged_at DESC);
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_usage_telemetry_student_time' AND object_id = OBJECT_ID('dbo.usage_telemetry'))
+BEGIN
+    CREATE INDEX idx_usage_telemetry_student_time ON dbo.usage_telemetry (student_id, recorded_at DESC);
+END
+GO
 
-COMMIT;
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'suspicious_flags' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.suspicious_flags (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        student_id       UNIQUEIDENTIFIER NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        class_session_id UNIQUEIDENTIFIER REFERENCES dbo.class_sessions(id) ON DELETE SET NULL,
+        assignment_id    UNIQUEIDENTIFIER REFERENCES dbo.assignments(id) ON DELETE SET NULL,
+        confidence_score DECIMAL(10,4) NOT NULL,
+        flagged_at       DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    );
+END
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'idx_suspicious_flags_student' AND object_id = OBJECT_ID('dbo.suspicious_flags'))
+BEGIN
+    CREATE INDEX idx_suspicious_flags_student ON dbo.suspicious_flags (student_id, flagged_at DESC);
+END
+GO
+
+COMMIT TRANSACTION;

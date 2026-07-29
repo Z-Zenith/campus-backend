@@ -12,6 +12,28 @@ permissions:
 jobs:
   backend-api-build:
     runs-on: ubuntu-latest
+    # The OpenAPI-snapshot step below runs the real app host (ASPNETCORE_ENVIRONMENT=
+    # Development), which starts every registered IHostedService — including
+    # DevSeedHostedService and FeeReminderHostedService, both of which open a real
+    # AppDbContext connection at startup. Nothing in this job previously provisioned a
+    # database, so that step failed with "Connection refused" on 127.0.0.1:5432 on every
+    # run, unrelated to whatever the PR actually changed. Matches db/README.md's documented
+    # local connection (Host=localhost;Port=5432;Database=campus;Username=campus;
+    # Password=campus_dev), which appsettings.json's committed dev placeholder also uses.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: campus
+          POSTGRES_PASSWORD: campus_dev
+          POSTGRES_DB: campus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
 
@@ -24,6 +46,19 @@ jobs:
 
       - name: Build
         run: dotnet build --no-restore -c Release
+
+      # Service containers start before checkout, so db/init/*.sql can't be mounted in via
+      # docker-entrypoint-initdb.d (the usual local/docker-compose path, see db/README.md) —
+      # applied explicitly here instead, now that the files actually exist on the runner.
+      # 03_create_app_role.sh (the campus_app role) is compose-only, not needed here since
+      # this job connects as the campus superuser, same as bare `dotnet run` per
+      # db/README.md.
+      - name: Apply DB schema
+        env:
+          PGPASSWORD: campus_dev
+        run: |
+          psql -h localhost -U campus -d campus -v ON_ERROR_STOP=1 -f db/init/01_schema.sql
+          psql -h localhost -U campus -d campus -v ON_ERROR_STOP=1 -f db/init/02_seed_roles_and_permissions.sql
 
       # Regenerate the committed OpenAPI snapshot from the current code and fail if it
       # drifted (Contracts/README.md documents this exact command). The generator builds

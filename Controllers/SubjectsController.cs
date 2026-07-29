@@ -36,7 +36,7 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
         var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
         var query = db.Subjects
             .Include(s => s.Department)
-            .Include(s => s.Teacher)
+            .Include(s => s.Teacher) // the subject coordinator - see SubjectDto.CoordinatorId's doc comment
             .Where(s => s.Department.CollegeId == callerCollegeId);
         if (departmentId is { } deptId)
         {
@@ -73,12 +73,12 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
             return Forbid();
         }
 
-        if (request.TeacherId is { } teacherId)
+        if (request.CoordinatorId is { } coordinatorId)
         {
-            var teacherError = await ValidateTeacherAsync(teacherId, department.CollegeId);
-            if (teacherError is not null)
+            var coordinatorError = await ValidateCoordinatorAsync(coordinatorId, department.CollegeId);
+            if (coordinatorError is not null)
             {
-                return teacherError;
+                return coordinatorError;
             }
         }
 
@@ -93,15 +93,15 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
             DepartmentId = request.DepartmentId,
             Code = request.Code,
             Name = request.Name,
-            TeacherId = request.TeacherId,
+            TeacherId = request.CoordinatorId,
         };
         db.Subjects.Add(subject);
         await db.SaveChangesAsync();
 
         subject.Department = department;
-        if (request.TeacherId is not null)
+        if (request.CoordinatorId is not null)
         {
-            subject.Teacher = await db.Users.FindAsync(request.TeacherId);
+            subject.Teacher = await db.Users.FindAsync(request.CoordinatorId);
         }
         return CreatedAtAction(nameof(List), null, ToDto(subject));
     }
@@ -130,12 +130,12 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
             return Forbid();
         }
 
-        if (request.TeacherId is { } teacherId)
+        if (request.CoordinatorId is { } coordinatorId)
         {
-            var teacherError = await ValidateTeacherAsync(teacherId, subject.Department.CollegeId);
-            if (teacherError is not null)
+            var coordinatorError = await ValidateCoordinatorAsync(coordinatorId, subject.Department.CollegeId);
+            if (coordinatorError is not null)
             {
-                return teacherError;
+                return coordinatorError;
             }
         }
 
@@ -146,10 +146,10 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
 
         subject.Code = request.Code;
         subject.Name = request.Name;
-        subject.TeacherId = request.TeacherId;
+        subject.TeacherId = request.CoordinatorId;
         await db.SaveChangesAsync();
 
-        subject.Teacher = request.TeacherId is not null ? await db.Users.FindAsync(request.TeacherId) : null;
+        subject.Teacher = request.CoordinatorId is not null ? await db.Users.FindAsync(request.CoordinatorId) : null;
         return Ok(ToDto(subject));
     }
 
@@ -193,22 +193,23 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
         return NoContent();
     }
 
-    private async Task<ObjectResult?> ValidateTeacherAsync(Guid teacherId, Guid departmentCollegeId)
+    private async Task<ObjectResult?> ValidateCoordinatorAsync(Guid coordinatorId, Guid departmentCollegeId)
     {
-        var teacher = await db.Users.FindAsync(teacherId);
-        if (teacher is null || teacher.AccountType != AccountType.Teacher)
+        var coordinator = await db.Users.FindAsync(coordinatorId);
+        if (coordinator is null || coordinator.AccountType != AccountType.Teacher)
         {
-            return BadRequest("TeacherId must belong to an existing Teacher account.");
+            return BadRequest("CoordinatorId must belong to an existing Teacher account.");
         }
-        if (teacher.CollegeId != departmentCollegeId)
+        if (coordinator.CollegeId != departmentCollegeId)
         {
-            return BadRequest("The teacher must belong to the department's college.");
+            return BadRequest("The coordinator must belong to the department's college.");
         }
         return null;
     }
 
     private static SubjectDto ToDto(Subject s) => new(
         s.Id, s.DepartmentId, s.Department.Name, s.Code, s.Name, s.TeacherId, s.Teacher?.FullName);
+    // ^ Subject.TeacherId/Teacher map to CoordinatorId/CoordinatorName - see SubjectDto's doc comment.
 
 
     // SDA-18: course + teacher info for every subject taught to a section the caller is

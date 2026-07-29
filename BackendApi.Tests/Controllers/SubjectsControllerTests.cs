@@ -315,8 +315,8 @@ public class SubjectsControllerTests
         var ok = Assert.IsType<CreatedAtActionResult>(result.Result);
         var dto = Assert.IsType<SubjectDto>(ok.Value);
         Assert.Equal("CS101", dto.Code);
-        Assert.Equal(teacher.Id, dto.TeacherId);
-        Assert.Equal("Teacher One", dto.TeacherName);
+        Assert.Equal(teacher.Id, dto.CoordinatorId);
+        Assert.Equal("Teacher One", dto.CoordinatorName);
     }
 
     [Fact]

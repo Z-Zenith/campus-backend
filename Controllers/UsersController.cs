@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Security.Claims;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
 using BackendApi.Services;
+using CsvHelper;
+using CsvHelper.Configuration;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -74,6 +77,143 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
 
         var provisioningUri = totpService.BuildProvisioningUri(totpSecret, request.Identifier, "Campus Platform");
         return CreatedAtAction(nameof(Create), new { id = user.Id }, new CreateUserResponse(user.Id, provisioningUri, totpSecret));
+    }
+
+    // Bulk account creation. Gated identically to Create above (manage_accounts), since it's
+    // the same write with a CSV front-end instead of one row at a time. Every row is created
+    // in the caller's own college (CollegeId is never read from the file, same rule as the
+    // single-account form) and validated with the exact same rules Create enforces — a bad
+    // row is skipped, not fatal to the whole upload, so this saves per-row rather than once
+    // at the end: a rare unique-constraint race on save still only fails that one row.
+    [HttpPost("import")]
+    [RequestSizeLimit(5_000_000)]
+    public async Task<ActionResult<ImportUsersResponse>> Import(IFormFile file)
+    {
+        var caller = await CurrentUserAsync();
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (!await permissions.HasPermissionAsync(caller.Id, "manage_accounts"))
+        {
+            return Forbid();
+        }
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest("A CSV file is required.");
+        }
+
+        List<ImportUserRow> rows;
+        try
+        {
+            using var stream = file.OpenReadStream();
+            using var reader = new StreamReader(stream);
+            var config = new CsvConfiguration(CultureInfo.InvariantCulture)
+            {
+                // Header matching is case/underscore-insensitive (e.g. "Initial Password",
+                // "initial_password", and "InitialPassword" all bind to InitialPassword) -
+                // real-world CSVs (Excel/Sheets exports) rarely match C# property casing
+                // exactly, and there's no reason to make the admin get it exact.
+                PrepareHeaderForMatch = args => args.Header.Replace(" ", "").Replace("_", "").ToLowerInvariant(),
+                HeaderValidated = null,
+                MissingFieldFound = null,
+            };
+            using var csv = new CsvReader(reader, config);
+            rows = csv.GetRecords<ImportUserRow>().ToList();
+        }
+        catch (Exception ex) when (ex is CsvHelperException or IOException)
+        {
+            return BadRequest($"Could not read the CSV file: {ex.Message}");
+        }
+
+        // Existing identifiers for this college, plus identifiers already accepted earlier
+        // in this same file - both count as a duplicate, so two rows in one upload with the
+        // same identifier don't both "succeed" only for the second SaveChangesAsync to fail.
+        var existingIdentifiers = (await db.Users
+            .Where(u => u.CollegeId == caller.CollegeId)
+            .Select(u => u.Identifier)
+            .ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var results = new List<ImportUsersRowResult>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var rowNumber = i + 2; // +1 for 1-indexing, +1 for the header row
+            var error = await ValidateAndCreateRowAsync(row, caller.CollegeId, existingIdentifiers);
+            results.Add(new ImportUsersRowResult(rowNumber, error is null, row.Identifier, error));
+        }
+
+        return Ok(new ImportUsersResponse(
+            rows.Count,
+            results.Count(r => r.Success),
+            results.Count(r => !r.Success),
+            results));
+    }
+
+    // Returns null on success, an error message otherwise. Mutates existingIdentifiers on
+    // success so a later row in the same file sees this one as taken.
+    private async Task<string?> ValidateAndCreateRowAsync(ImportUserRow row, Guid collegeId, HashSet<string> existingIdentifiers)
+    {
+        if (string.IsNullOrWhiteSpace(row.Identifier) || string.IsNullOrWhiteSpace(row.FullName) || string.IsNullOrWhiteSpace(row.InitialPassword))
+        {
+            return "Identifier, FullName, and InitialPassword are required.";
+        }
+        if (!Enum.TryParse<AccountType>(row.AccountType, ignoreCase: true, out var accountType))
+        {
+            return $"Unknown AccountType '{row.AccountType}' (expected Student, Teacher, AdminTier, or Parent).";
+        }
+        if (existingIdentifiers.Contains(row.Identifier))
+        {
+            return "An account with this identifier already exists.";
+        }
+        if (!PasswordPolicy.IsValid(row.InitialPassword, out var passwordError))
+        {
+            return passwordError;
+        }
+
+        Guid? departmentId = null;
+        if (!string.IsNullOrWhiteSpace(row.DepartmentId))
+        {
+            if (!Guid.TryParse(row.DepartmentId, out var parsedDepartmentId))
+            {
+                return $"DepartmentId '{row.DepartmentId}' is not a valid id.";
+            }
+            var department = await db.Departments.FindAsync(parsedDepartmentId);
+            if (department is null || department.CollegeId != collegeId)
+            {
+                return "DepartmentId does not belong to a department in your college.";
+            }
+            departmentId = parsedDepartmentId;
+        }
+
+        var totpSecret = totpService.GenerateSecret();
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = collegeId,
+            AccountType = accountType,
+            Identifier = row.Identifier,
+            PasswordHash = passwordHasher.Hash(row.InitialPassword),
+            TotpSecret = totpService.Protect(totpSecret),
+            FullName = row.FullName,
+            DepartmentId = departmentId,
+            IsActive = true,
+        };
+
+        db.Users.Add(user);
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            db.Entry(user).State = EntityState.Detached;
+            return "An account with this identifier already exists.";
+        }
+
+        existingIdentifiers.Add(row.Identifier);
+        return null;
     }
 
     // AWA-07, AWA-08. Self-view needs no special permission. Viewing another user's

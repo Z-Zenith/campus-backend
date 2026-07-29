@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.ApiDescription.Server" Version="10.0.10">
@@ -45,9 +46,7 @@
   </ItemGroup>
 
   <Target Name="RenameOpenApiSnapshot" AfterTargets="GenerateOpenApiDocuments">
-    <Move SourceFiles="$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json"
-          DestinationFiles="$(MSBuildProjectDirectory)/Contracts/openapi.snapshot.json"
-          Condition="Exists('$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json')" />
+    <Move SourceFiles="$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json" DestinationFiles="$(MSBuildProjectDirectory)/Contracts/openapi.snapshot.json" Condition="Exists('$(MSBuildProjectDirectory)/Contracts/openapi-snapshot.json')" />
   </Target>
 
 </Project>

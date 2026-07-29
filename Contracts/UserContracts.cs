@@ -12,6 +12,28 @@ public record CreateUserRequest(
 
 public record CreateUserResponse(Guid UserId, string TotpProvisioningUri, string TotpSecret);
 
+// Bulk account creation via CSV upload — every row is validated and created with the
+// exact same rules as a single Create call (password policy, department-college match),
+// but a bad row skips that row rather than rolling back the whole file (a 500-row upload
+// with 3 bad rows should create the other 497). CollegeId is never read from the file —
+// same "never take college id as input from the caller" rule as the single-create form —
+// every row is created in the caller's own college.
+public record ImportUsersRowResult(int RowNumber, bool Success, string? Identifier, string? Error);
+
+public record ImportUsersResponse(int TotalRows, int SuccessCount, int FailureCount, List<ImportUsersRowResult> Results);
+
+// CsvHelper binds this per row; fields are plain strings (not AccountType/Guid) since a
+// malformed value must produce a per-row error, not an unhandled parse exception during
+// GetRecords<T>() that would fail the entire file.
+public class ImportUserRow
+{
+    public string AccountType { get; set; } = "";
+    public string Identifier { get; set; } = "";
+    public string InitialPassword { get; set; } = "";
+    public string FullName { get; set; } = "";
+    public string? DepartmentId { get; set; }
+}
+
 public record ResetPasswordRequest(string NewPassword);
 
 // AWA-07 — a teacher-submitted remark. TeacherName is resolved via the FK join

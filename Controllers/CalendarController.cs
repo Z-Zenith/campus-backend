@@ -159,10 +159,34 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
 
         if (section is not null)
         {
-            items.AddRange(await ThisWeeksClassSessionsAsync(section.Id));
+            var college = await db.Colleges.FindAsync(student.CollegeId);
+            items.AddRange(await ThisWeeksClassSessionsAsync(section.Id, college));
         }
 
         return Ok(new MyCalendarResponse(items));
+    }
+
+    // SDA-14: the full to-do list (dated and undated), for the desktop app's standalone
+    // Todos card. Deliberately separate from calendar/mine's todo sub-query, which omits
+    // undated todos on purpose (#159) since it has no "undated" bucket to place them in —
+    // this endpoint isn't calendar-grid-shaped, so it has no such constraint.
+    [HttpGet("todos/mine")]
+    public async Task<ActionResult<List<TodoDto>>> MyTodos()
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+
+        var todos = await db.Todos
+            .Where(t => t.StudentId == student.Id)
+            .OrderByDescending(t => t.Priority)
+            .ThenBy(t => t.DueDate ?? DateTime.MaxValue)
+            .ThenBy(t => t.CreatedAt)
+            .ToListAsync();
+
+        return Ok(todos.Select(ToTodoDto).ToList());
     }
 
     // SDA-14: personal to-dos — student-owned, no permission check beyond "it's mine".
@@ -186,10 +210,45 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             Title = request.Title.Trim(),
             DueDate = request.DueDate,
             Completed = false,
+            Priority = request.Priority,
+            CreatedAt = DateTime.UtcNow,
         };
         db.Todos.Add(todo);
         await db.SaveChangesAsync();
 
+        return Ok(ToTodoDto(todo));
+    }
+
+    [HttpPatch("todos/{id}")]
+    public async Task<ActionResult<TodoDto>> UpdateTodo(Guid id, UpdateTodoRequest request)
+    {
+        var student = await CurrentStudentAsync();
+        if (student is null)
+        {
+            return Forbid();
+        }
+
+        var todo = await db.Todos.FirstOrDefaultAsync(t => t.Id == id && t.StudentId == student.Id);
+        if (todo is null)
+        {
+            return NotFound();
+        }
+
+        if (request.Title is not null)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title))
+            {
+                return BadRequest(new { error = "title_required", message = "To-do title must not be empty." });
+            }
+            todo.Title = request.Title.Trim();
+        }
+        todo.DueDate = request.DueDate;
+        if (request.Priority.HasValue)
+        {
+            todo.Priority = request.Priority.Value;
+        }
+
+        await db.SaveChangesAsync();
         return Ok(ToTodoDto(todo));
     }
 
@@ -287,11 +346,11 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         return student is { AccountType: AccountType.Student } ? student : null;
     }
 
-    private static TodoDto ToTodoDto(Todo t) => new(t.Id, t.Title, t.DueDate, t.Completed);
+    private static TodoDto ToTodoDto(Todo t) => new(t.Id, t.Title, t.DueDate, t.Completed, t.Priority, t.CreatedAt);
 
     private static CustomCalendarEntryDto ToCustomEntryDto(CustomCalendarEntry c) => new(c.Id, c.Title, c.EntryDate);
 
-    private async Task<List<CalendarItemDto>> ThisWeeksClassSessionsAsync(Guid sectionId)
+    private async Task<List<CalendarItemDto>> ThisWeeksClassSessionsAsync(Guid sectionId, College? college)
     {
         var slots = await db.TimetableSlots
             .Where(s => s.SectionId == sectionId)
@@ -299,11 +358,10 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             .Include(s => s.Teacher)
             .ToListAsync();
 
-        // TODO: DateTime.UtcNow is used for "today" here; this can shift the
-        // weekly boundary for non-UTC colleges near midnight. Needs a
-        // College.TimeZone column (schema change - requires sign-off) to fix
-        // properly. Tracked as a follow-up, not blocking this PR.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // #152-class fix: derive "today" from the college's local time zone (same helper
+        // TimetableController/FeesController already use) instead of raw UTC, which used to
+        // shift the weekly boundary for non-UTC colleges near local midnight.
+        var today = CollegeClock.LocalDate(college, DateTime.UtcNow);
         var monday = today.AddDays(-((int)today.DayOfWeek == 0 ? 6 : (int)today.DayOfWeek - 1));
 
         return slots.Select(s =>

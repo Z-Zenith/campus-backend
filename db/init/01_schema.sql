@@ -396,8 +396,12 @@ CREATE TABLE IF NOT EXISTS todos (
     student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title      text NOT NULL,
     due_date   timestamptz,
-    completed  boolean NOT NULL DEFAULT false
+    completed  boolean NOT NULL DEFAULT false,
+    priority   int NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 3),
+    created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_todos_student ON todos (student_id, completed);
 
 CREATE TABLE IF NOT EXISTS custom_calendar_entries (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -30,3 +30,9 @@ public record UpdateExamScheduleRequest(
     TimeOnly StartTime,
     TimeOnly EndTime,
     string? Room);
+
+// Genuinely unscoped before this: no endpoint anywhere lists sections, and no controller
+// creates one either (sections are seeded, not application-managed). This is deliberately
+// read-only - just enough to populate a section picker for exam scheduling, not full
+// Section CRUD (a separate, bigger gap - flagged, not fixed here).
+public record SectionDto(Guid Id, Guid DepartmentId, int Year, string Name);

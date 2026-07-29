@@ -19,6 +19,35 @@ namespace BackendApi.Controllers;
 [Authorize]
 public class ExamSchedulesController(AppDbContext db, IPermissionService permissions, ICollegeScopeService collegeScope) : ControllerBase
 {
+    // Read-only section picker for the exam-schedule form above - see SectionDto's doc
+    // comment for why this isn't full Section CRUD.
+    [HttpGet("departments/{departmentId}/sections")]
+    public async Task<ActionResult<List<SectionDto>>> ListSections(Guid departmentId)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_timetable"))
+        {
+            return Forbid();
+        }
+
+        var department = await db.Departments.FindAsync(departmentId);
+        if (department is null)
+        {
+            return NotFound();
+        }
+        if (!await IsInScopeAsync(userId, departmentId, department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var sections = await db.Sections
+            .Where(s => s.DepartmentId == departmentId)
+            .OrderBy(s => s.Year).ThenBy(s => s.Name)
+            .Select(s => new SectionDto(s.Id, s.DepartmentId, s.Year, s.Name))
+            .ToListAsync();
+        return Ok(sections);
+    }
+
     [HttpGet("sections/{sectionId}/exam-schedules")]
     public async Task<ActionResult<List<ExamScheduleDto>>> List(Guid sectionId)
     {

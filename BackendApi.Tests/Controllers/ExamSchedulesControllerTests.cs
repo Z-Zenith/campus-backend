@@ -58,6 +58,44 @@ public class ExamSchedulesControllerTests
     };
 
     [Fact]
+    public async Task ListSections_ForbidsCrossCollegeDepartment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var otherCollegeDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "EE" };
+        db.Users.Add(caller);
+        db.Departments.Add(otherCollegeDepartment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.ListSections(otherCollegeDepartment.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListSections_ReturnsSectionsForDepartment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 2, Name = "B" };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.ListSections(department.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var sections = Assert.IsType<List<SectionDto>>(ok.Value);
+        var dto = Assert.Single(sections);
+        Assert.Equal("B", dto.Name);
+        Assert.Equal(2, dto.Year);
+    }
+
+    [Fact]
     public async Task Create_ForbidsCallerWithoutCreateTimetablePermission()
     {
         await using var db = NewDb();

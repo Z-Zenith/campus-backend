@@ -25,3 +25,11 @@ public record SubjectDto(
 public record CreateSubjectRequest(Guid DepartmentId, string Code, string Name, Guid? CoordinatorId);
 
 public record UpdateSubjectRequest(string Code, string Name, Guid? CoordinatorId);
+
+// Subject teacher roster (subject_teachers) - the stable "who teaches this subject" list,
+// decided once and rarely changed, distinct from the Coordinator above (an administrative
+// role, not required to be a member of this roster) and from TeacherSectionAssignment (the
+// per-semester section rotation - see TimetableContracts.cs's TeacherSectionAssignmentDto).
+public record SubjectTeacherDto(Guid Id, Guid SubjectId, Guid TeacherId, string TeacherName);
+
+public record AddSubjectTeacherRequest(Guid TeacherId);

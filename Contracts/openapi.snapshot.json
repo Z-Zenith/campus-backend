@@ -3577,6 +3577,145 @@
         }
       }
     },
+    "/api/v1/subjects/{id}/teachers": {
+      "get": {
+        "tags": [
+          "Subjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubjectTeacherDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubjectTeacherDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SubjectTeacherDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Subjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSubjectTeacherRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSubjectTeacherRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSubjectTeacherRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectTeacherDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectTeacherDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectTeacherDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subjects/{id}/teachers/{teacherId}": {
+      "delete": {
+        "tags": [
+          "Subjects"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "teacherId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/subjects/mine": {
       "get": {
         "tags": [
@@ -4041,6 +4180,145 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/timetable/sections/{sectionId}/teacher-assignments": {
+      "get": {
+        "tags": [
+          "Timetable"
+        ],
+        "parameters": [
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Timetable"
+        ],
+        "parameters": [
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeacherSectionAssignmentRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeacherSectionAssignmentRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeacherSectionAssignmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeacherSectionAssignmentDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/timetable/sections/{sectionId}/teacher-assignments/{assignmentId}": {
+      "delete": {
+        "tags": [
+          "Timetable"
+        ],
+        "parameters": [
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "assignmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
           }
         }
       }
@@ -4609,6 +4887,18 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "AddSubjectTeacherRequest": {
+        "required": [
+          "teacherId"
+        ],
+        "type": "object",
+        "properties": {
+          "teacherId": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5664,7 +5954,7 @@
           "departmentId",
           "code",
           "name",
-          "teacherId"
+          "coordinatorId"
         ],
         "type": "object",
         "properties": {
@@ -5678,11 +5968,28 @@
           "name": {
             "type": "string"
           },
-          "teacherId": {
+          "coordinatorId": {
             "type": [
               "null",
               "string"
             ],
+            "format": "uuid"
+          }
+        }
+      },
+      "CreateTeacherSectionAssignmentRequest": {
+        "required": [
+          "subjectId",
+          "teacherId"
+        ],
+        "type": "object",
+        "properties": {
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teacherId": {
+            "type": "string",
             "format": "uuid"
           }
         }
@@ -7442,8 +7749,8 @@
           "departmentName",
           "code",
           "name",
-          "teacherId",
-          "teacherName"
+          "coordinatorId",
+          "coordinatorName"
         ],
         "type": "object",
         "properties": {
@@ -7464,14 +7771,14 @@
           "name": {
             "type": "string"
           },
-          "teacherId": {
+          "coordinatorId": {
             "type": [
               "null",
               "string"
             ],
             "format": "uuid"
           },
-          "teacherName": {
+          "coordinatorName": {
             "type": [
               "null",
               "string"
@@ -7511,6 +7818,32 @@
               "string"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "SubjectTeacherDto": {
+        "required": [
+          "id",
+          "subjectId",
+          "teacherId",
+          "teacherName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teacherId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teacherName": {
+            "type": "string"
           }
         }
       },
@@ -7873,6 +8206,45 @@
           }
         }
       },
+      "TeacherSectionAssignmentDto": {
+        "required": [
+          "id",
+          "sectionId",
+          "subjectId",
+          "subjectCode",
+          "subjectName",
+          "teacherId",
+          "teacherName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectCode": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          },
+          "teacherId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "teacherName": {
+            "type": "string"
+          }
+        }
+      },
       "TelemetryEventRequest": {
         "required": [
           "eventType",
@@ -8161,7 +8533,7 @@
         "required": [
           "code",
           "name",
-          "teacherId"
+          "coordinatorId"
         ],
         "type": "object",
         "properties": {
@@ -8171,7 +8543,7 @@
           "name": {
             "type": "string"
           },
-          "teacherId": {
+          "coordinatorId": {
             "type": [
               "null",
               "string"

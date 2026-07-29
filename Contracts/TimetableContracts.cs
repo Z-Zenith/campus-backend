@@ -2,6 +2,17 @@ namespace BackendApi.Contracts;
 
 public record GenerateTimetableRequest(Guid? DepartmentId);
 
+// Admin CRUD for teacher_section_assignments - the per-semester "teacher X teaches subject
+// Y in section Z" rotation. Previously had no production endpoint at all (only ever
+// seeded directly in tests) - this is the missing counterpart to the stable
+// subject_teachers roster (see SubjectsContracts.cs's SubjectTeacherDto): the roster
+// decides who's fixed to teach a subject; this assigns one of those roster teachers to an
+// actual section for the current rotation.
+public record TeacherSectionAssignmentDto(
+    Guid Id, Guid SectionId, Guid SubjectId, string SubjectCode, string SubjectName, Guid TeacherId, string TeacherName);
+
+public record CreateTeacherSectionAssignmentRequest(Guid SubjectId, Guid TeacherId);
+
 public record TimetableSlotDto(
     Guid Id,
     int DayOfWeek,

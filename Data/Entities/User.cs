@@ -151,6 +151,9 @@ public partial class User
     [InverseProperty("Teacher")]
     public virtual ICollection<Subject> Subjects { get; set; } = new List<Subject>();
 
+    [InverseProperty("Teacher")]
+    public virtual ICollection<SubjectTeacher> SubjectTeachers { get; set; } = new List<SubjectTeacher>();
+
     [InverseProperty("Student")]
     public virtual ICollection<Submission> Submissions { get; set; } = new List<Submission>();
 

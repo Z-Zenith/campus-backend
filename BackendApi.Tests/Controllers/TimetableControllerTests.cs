@@ -802,4 +802,198 @@ public class TimetableControllerTests
         Assert.Equal(admin.Id, routed.RecipientId);
         Assert.Equal(NotificationType.TimetableRequest, routed.Type);
     }
+
+    // Admin CRUD for teacher_section_assignments - previously had no production endpoint
+    // anywhere (only ever seeded directly in tests). CreateTeacherAssignment's core new
+    // behavior: a teacher can only be assigned if they're already on the subject's stable
+    // roster (subject_teachers).
+    [Fact]
+    public async Task CreateTeacherAssignment_ForbidsCallerWithoutCreateTimetablePermission()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher); // FakePermissionService denies everything
+        var result = await controller.CreateTeacherAssignment(section.Id, new CreateTeacherSectionAssignmentRequest(subject.Id, teacher.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateTeacherAssignment_RejectsTeacherNotOnSubjectRoster()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync(); // no SubjectTeacher roster entry for this teacher
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.CreateTeacherAssignment(section.Id, new CreateTeacherSectionAssignmentRequest(subject.Id, teacher.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateTeacherAssignment_RejectsSubjectFromADifferentDepartment()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var otherDepartment = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.AddRange(department, otherDepartment);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.CreateTeacherAssignment(section.Id, new CreateTeacherSectionAssignmentRequest(subject.Id, teacher.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateTeacherAssignment_CreatesAssignmentForRosterTeacher()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.CreateTeacherAssignment(section.Id, new CreateTeacherSectionAssignmentRequest(subject.Id, teacher.Id));
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var dto = Assert.IsType<TeacherSectionAssignmentDto>(created.Value);
+        Assert.Equal(teacher.Id, dto.TeacherId);
+        Assert.Equal(subject.Id, dto.SubjectId);
+    }
+
+    [Fact]
+    public async Task CreateTeacherAssignment_RejectsDuplicateAssignment()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.CreateTeacherAssignment(section.Id, new CreateTeacherSectionAssignmentRequest(subject.Id, teacher.Id));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListTeacherAssignments_ReturnsAssignmentsForSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = teacher.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.ListTeacherAssignments(section.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var list = Assert.IsType<List<TeacherSectionAssignmentDto>>(ok.Value);
+        Assert.Single(list);
+    }
+
+    [Fact]
+    public async Task DeleteTeacherAssignment_RemovesAssignment()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        teacher.CollegeId = department.CollegeId;
+        var assignment = new TeacherSectionAssignment { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = teacher.Id };
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.TeacherSectionAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher, new AllowingPermissionService());
+        var result = await controller.DeleteTeacherAssignment(section.Id, assignment.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.DoesNotContain(db.TeacherSectionAssignments.Local, a => a.Id == assignment.Id);
+    }
+
+    [Fact]
+    public async Task ListTeacherAssignments_ForbidsSectionOutsideCallersDepartmentScope()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var teacher = NewUser(AccountType.Teacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+
+        var hodOfOtherDepartment = new FakeDepartmentScopedPermissionService(Guid.NewGuid());
+        var controller = ControllerAs(db, teacher, hodOfOtherDepartment);
+        var result = await controller.ListTeacherAssignments(section.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // A department-scoped (HoD-tier) caller for a specific department other than the
+    // section's own - exercises IsInScopeAsync's departmentScope branch (as opposed to
+    // AllowingPermissionService's global/null scope).
+    private class FakeDepartmentScopedPermissionService(Guid departmentId) : IPermissionService
+    {
+        public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
+        public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(departmentId);
+    }
 }

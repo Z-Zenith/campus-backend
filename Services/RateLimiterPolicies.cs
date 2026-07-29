@@ -13,19 +13,29 @@ public static class RateLimiterPolicies
     public const string Auth = "auth";
 
     public static RateLimitPartition<string> AuthPartitioner(HttpContext httpContext) =>
+        CreatePartition(httpContext, permitLimit: 5);
+
+    // Dev-only: the 5/min production limit above is easy to exhaust while actively testing
+    // login locally (repeated manual attempts, verification scripts, etc. all sharing the same
+    // loopback IP), turning an otherwise-correct password/TOTP attempt into an opaque 429 that
+    // looks identical to a wrong code. Never used outside Development — see Program.cs.
+    public static RateLimitPartition<string> RelaxedAuthPartitioner(HttpContext httpContext) =>
+        CreatePartition(httpContext, permitLimit: 100);
+
+    private static RateLimitPartition<string> CreatePartition(HttpContext httpContext, int permitLimit) =>
         RateLimitPartition.GetSlidingWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             factory: _ => new SlidingWindowRateLimiterOptions
             {
-                PermitLimit = 5,
+                PermitLimit = permitLimit,
                 Window = TimeSpan.FromMinutes(1),
                 SegmentsPerWindow = 4,
                 QueueLimit = 0,
             });
 
-    public static void ConfigureAuth(RateLimiterOptions options)
+    public static void ConfigureAuth(RateLimiterOptions options, bool relaxed = false)
     {
         options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-        options.AddPolicy(Auth, AuthPartitioner);
+        options.AddPolicy<string>(Auth, relaxed ? RelaxedAuthPartitioner : AuthPartitioner);
     }
 }

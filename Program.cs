@@ -210,7 +210,8 @@ builder.Services.AddAuthorization();
 // script can't brute-force the DOB/password space. Applied via
 // [EnableRateLimiting(RateLimiterPolicies.Auth)] on each login action rather than globally,
 // so it doesn't throttle normal authenticated traffic.
-builder.Services.AddRateLimiter(RateLimiterPolicies.ConfigureAuth);
+builder.Services.AddRateLimiter(options =>
+    RateLimiterPolicies.ConfigureAuth(options, relaxed: builder.Environment.IsDevelopment()));
 
 // #141: RateLimiterPolicies partitions on httpContext.Connection.RemoteIpAddress, which is
 // only the real client IP when backend-api receives connections directly — true today (no

@@ -315,4 +315,146 @@ public class CalendarControllerTests
         Assert.IsType<NoContentResult>(deleted);
         Assert.Empty(await db.CustomCalendarEntries.ToListAsync());
     }
+
+    // Regression test for the bug this endpoint exists to fix: the desktop app's quick-add
+    // UI always creates todos with no due date, and calendar/mine deliberately omits those
+    // (#159) — so undated todos need their own read path that doesn't filter them out.
+    [Fact]
+    public async Task MyTodos_ReturnsUndatedAndDatedTodos()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        db.Todos.Add(new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "No due date", DueDate = null });
+        db.Todos.Add(new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "Has a due date", DueDate = DateTime.UtcNow.AddDays(1) });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.MyTodos();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var todos = Assert.IsType<List<TodoDto>>(ok.Value);
+        Assert.Equal(2, todos.Count);
+        Assert.Contains(todos, t => t.DueDate is null);
+        Assert.Contains(todos, t => t.DueDate is not null);
+    }
+
+    [Fact]
+    public async Task MyTodos_SortsByPriorityThenDueDateThenCreatedAt()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        var low = new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "Low priority", Priority = 0, CreatedAt = DateTime.UtcNow };
+        var highLaterDue = new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "High, due later", Priority = 3, DueDate = DateTime.UtcNow.AddDays(5), CreatedAt = DateTime.UtcNow };
+        var highSoonerDue = new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "High, due sooner", Priority = 3, DueDate = DateTime.UtcNow.AddDays(1), CreatedAt = DateTime.UtcNow };
+        db.Todos.AddRange(low, highLaterDue, highSoonerDue);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.MyTodos();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var todos = Assert.IsType<List<TodoDto>>(ok.Value);
+        Assert.Equal([highSoonerDue.Id, highLaterDue.Id, low.Id], todos.Select(t => t.Id).ToList());
+    }
+
+    [Fact]
+    public async Task UpdateTodo_EditsTitleDueDateAndPriority()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        var todo = new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "Original", Priority = 0 };
+        db.Todos.Add(todo);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var newDueDate = DateTime.UtcNow.AddDays(7);
+        var result = await controller.UpdateTodo(todo.Id, new UpdateTodoRequest("Renamed", newDueDate, 2));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var updated = Assert.IsType<TodoDto>(ok.Value);
+        Assert.Equal("Renamed", updated.Title);
+        Assert.Equal(newDueDate, updated.DueDate);
+        Assert.Equal(2, updated.Priority);
+    }
+
+    [Fact]
+    public async Task UpdateTodo_RejectsEmptyTitle()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        var todo = new Todo { Id = Guid.NewGuid(), StudentId = student.Id, Title = "Original" };
+        db.Todos.Add(todo);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.UpdateTodo(todo.Id, new UpdateTodoRequest("   ", null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task UpdateTodo_ReturnsNotFound_ForAnotherStudentsTodo()
+    {
+        await using var db = NewDb();
+        var owner = NewUser(AccountType.Student);
+        var otherStudent = NewUser(AccountType.Student);
+        db.Users.AddRange(owner, otherStudent);
+        var todo = new Todo { Id = Guid.NewGuid(), StudentId = owner.Id, Title = "Owner's todo" };
+        db.Todos.Add(todo);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherStudent);
+        var result = await controller.UpdateTodo(todo.Id, new UpdateTodoRequest("Hijacked", null, null));
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    // #152-class fix: class-session dates on the Calendar grid must be derived from the
+    // college's local time zone (via CollegeClock), not raw UTC — same pattern already
+    // proven for attendance (TimetableControllerTests.Twa08_MarkAttendance_...) and now
+    // applied here too.
+    [Fact]
+    public async Task MyCalendar_ClassSessions_UseCollegeLocalDate_NotRawUtc()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        var college = new College { Id = student.CollegeId, Name = "Kiritimati Campus", TimeZone = "Pacific/Kiritimati" };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = college.Id, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 1, Name = "A" };
+        var teacher = NewUser(AccountType.Teacher);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro to CS" };
+        var slot = new TimetableSlot
+        {
+            Id = Guid.NewGuid(),
+            SectionId = section.Id,
+            SubjectId = subject.Id,
+            TeacherId = teacher.Id,
+            DayOfWeek = 1,
+            StartTime = new TimeOnly(9, 0),
+            EndTime = new TimeOnly(10, 0),
+        };
+        db.Colleges.Add(college);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Users.AddRange(student, teacher);
+        db.Subjects.Add(subject);
+        db.TimetableSlots.Add(slot);
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.MyCalendar();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<MyCalendarResponse>(ok.Value);
+        var session = Assert.Single(response.Items, i => i.Kind == "class_session");
+
+        var expectedToday = CollegeClock.LocalDate(college, DateTime.UtcNow);
+        var expectedMonday = expectedToday.AddDays(-((int)expectedToday.DayOfWeek == 0 ? 6 : (int)expectedToday.DayOfWeek - 1));
+        Assert.Equal(expectedMonday.ToDateTime(slot.StartTime), session.Start);
+    }
 }

@@ -25,6 +25,12 @@ public partial class Todo
     [Column("completed")]
     public bool Completed { get; set; }
 
+    [Column("priority")]
+    public int Priority { get; set; }
+
+    [Column("created_at")]
+    public DateTime CreatedAt { get; set; }
+
     [ForeignKey("StudentId")]
     [InverseProperty("Todos")]
     public virtual User Student { get; set; } = null!;

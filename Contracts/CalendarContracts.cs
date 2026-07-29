@@ -20,11 +20,17 @@ public record MyCalendarResponse(List<CalendarItemDto> Items);
 
 // SDA-14: student-personal to-dos and custom calendar entries — student-owned, no
 // permission check beyond "it's mine" (see CalendarController's write endpoints).
-public record CreateTodoRequest(string Title, DateTime? DueDate);
+// Priority is 0-3 (None/Low/Medium/High), enforced by a DB CHECK constraint.
+public record CreateTodoRequest(string Title, DateTime? DueDate, int Priority = 0);
 
-public record TodoDto(Guid Id, string Title, DateTime? DueDate, bool Completed);
+public record TodoDto(Guid Id, string Title, DateTime? DueDate, bool Completed, int Priority, DateTime CreatedAt);
 
 public record SetTodoCompleteRequest(bool Completed);
+
+// Partial edit: null Title/Priority means "leave unchanged". DueDate is always-authoritative
+// (matches SetTodoCompleteRequest's always-authoritative Completed) — pass the current due
+// date to keep it as-is, or null to clear it.
+public record UpdateTodoRequest(string? Title, DateTime? DueDate, int? Priority);
 
 public record CreateCustomCalendarEntryRequest(string Title, DateOnly EntryDate);
 

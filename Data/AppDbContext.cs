@@ -741,6 +741,9 @@ public partial class AppDbContext : DbContext
             entity.HasKey(e => e.Id).HasName("todos_pkey");
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Priority).HasDefaultValue(0);
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.HasIndex(e => new { e.StudentId, e.Completed }, "idx_todos_student");
 
             entity.HasOne(d => d.Student).WithMany(p => p.Todos).HasConstraintName("todos_student_id_fkey");
         });

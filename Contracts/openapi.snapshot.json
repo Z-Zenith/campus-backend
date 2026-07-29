@@ -1870,6 +1870,194 @@
         }
       }
     },
+    "/api/v1/sections/{sectionId}/exam-schedules": {
+      "get": {
+        "tags": [
+          "ExamSchedules"
+        ],
+        "parameters": [
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExamScheduleDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExamScheduleDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExamScheduleDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ExamSchedules"
+        ],
+        "parameters": [
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExamScheduleRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExamScheduleRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExamScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/exam-schedules/{id}": {
+      "put": {
+        "tags": [
+          "ExamSchedules"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExamScheduleRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExamScheduleRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExamScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExamScheduleDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ExamSchedules"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/fees/links": {
       "post": {
         "tags": [
@@ -6455,6 +6643,54 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "eventType": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EventType"
+              }
+            ]
+          }
+        }
+      },
+      "CreateExamScheduleRequest": {
+        "required": [
+          "subjectId",
+          "examType",
+          "examDate",
+          "startTime",
+          "endTime",
+          "room"
+        ],
+        "type": "object",
+        "properties": {
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "examType": {
+            "$ref": "#/components/schemas/ExamType"
+          },
+          "examDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "room": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -7111,7 +7347,8 @@
           "title",
           "startTime",
           "endTime",
-          "isRegistered"
+          "isRegistered",
+          "eventType"
         ],
         "type": "object",
         "properties": {
@@ -7132,8 +7369,84 @@
           },
           "isRegistered": {
             "type": "boolean"
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/EventType"
           }
         }
+      },
+      "EventType": {
+        "enum": [
+          "Academic",
+          "Holiday",
+          "Cultural",
+          "Sports",
+          "Other"
+        ],
+        "type": "string"
+      },
+      "ExamScheduleDto": {
+        "required": [
+          "id",
+          "sectionId",
+          "subjectId",
+          "subjectCode",
+          "subjectName",
+          "examType",
+          "examDate",
+          "startTime",
+          "endTime",
+          "room"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectCode": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          },
+          "examType": {
+            "$ref": "#/components/schemas/ExamType"
+          },
+          "examDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "room": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ExamType": {
+        "enum": [
+          "Internal",
+          "External"
+        ],
+        "type": "string"
       },
       "ExitPingResponse": {
         "required": [
@@ -9639,6 +9952,35 @@
           }
         }
       },
+      "UpdateExamScheduleRequest": {
+        "required": [
+          "examDate",
+          "startTime",
+          "endTime",
+          "room"
+        ],
+        "type": "object",
+        "properties": {
+          "examDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "startTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "endTime": {
+            "type": "string",
+            "format": "time"
+          },
+          "room": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "UpdateNoteRequest": {
         "required": [
           "title",
@@ -9936,6 +10278,9 @@
     },
     {
       "name": "Community"
+    },
+    {
+      "name": "ExamSchedules"
     },
     {
       "name": "Fees"

@@ -48,6 +48,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<EventRegistration> EventRegistrations { get; set; }
 
+    public virtual DbSet<ExamSchedule> ExamSchedules { get; set; }
+
     public virtual DbSet<ExternalMark> ExternalMarks { get; set; }
 
     public virtual DbSet<FeeRecord> FeeRecords { get; set; }
@@ -133,6 +135,8 @@ public partial class AppDbContext : DbContext
             .HasPostgresEnum<AssignmentType>()
             .HasPostgresEnum<AttendanceStatus>()
             .HasPostgresEnum<DocType>()
+            .HasPostgresEnum<EventType>()
+            .HasPostgresEnum<ExamType>()
             .HasPostgresEnum<FeeStatus>()
             .HasPostgresEnum<GroupType>()
             .HasPostgresEnum<NotificationType>()
@@ -325,12 +329,28 @@ public partial class AppDbContext : DbContext
             entity.HasKey(e => e.Id).HasName("events_pkey");
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.EventType).HasDefaultValue(EventType.Academic);
 
             entity.HasOne(d => d.College).WithMany(p => p.Events).HasConstraintName("events_college_id_fkey");
 
             entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.Events)
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("events_created_by_fkey");
+        });
+
+        modelBuilder.Entity<ExamSchedule>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("exam_schedules_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+
+            entity.HasOne(d => d.Section).WithMany(p => p.ExamSchedules).HasConstraintName("exam_schedules_section_id_fkey");
+
+            entity.HasOne(d => d.Subject).WithMany(p => p.ExamSchedules).HasConstraintName("exam_schedules_subject_id_fkey");
+
+            entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.ExamSchedules)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("exam_schedules_created_by_fkey");
         });
 
         modelBuilder.Entity<EventRegistration>(entity =>

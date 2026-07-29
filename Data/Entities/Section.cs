@@ -28,6 +28,9 @@ public partial class Section
     public virtual Department Department { get; set; } = null!;
 
     [InverseProperty("Section")]
+    public virtual ICollection<ExamSchedule> ExamSchedules { get; set; } = new List<ExamSchedule>();
+
+    [InverseProperty("Section")]
     public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
 
     [InverseProperty("Section")]

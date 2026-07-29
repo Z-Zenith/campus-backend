@@ -1,13 +1,20 @@
 namespace BackendApi.Contracts;
 
+// EventType lets a Holiday (Academic Calendar work) be modeled as an Event rather than a
+// parallel concept - reuses the existing college-wide/section-restricted visibility model.
+// Optional on create; defaults to Academic so existing callers (TWA-15) keep working
+// unchanged without setting it.
+using BackendApi.Data.Entities;
+
 public record CreateEventRequest(
     string Title,
     DateTime StartTime,
     DateTime EndTime,
     List<int>? RestrictedYears,
-    List<Guid>? RestrictedDepartments);
+    List<Guid>? RestrictedDepartments,
+    EventType? EventType = null);
 
-public record EventDto(Guid Id, string Title, DateTime StartTime, DateTime EndTime, bool IsRegistered);
+public record EventDto(Guid Id, string Title, DateTime StartTime, DateTime EndTime, bool IsRegistered, EventType EventType);
 
 public record RegisterForEventResponse(Guid EventId, Guid StudentId, DateTime RegisteredAt);
 

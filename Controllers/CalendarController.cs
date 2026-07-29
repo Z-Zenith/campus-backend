@@ -47,11 +47,12 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             CreatedBy = userId,
             RestrictedYears = request.RestrictedYears,
             RestrictedDepartments = request.RestrictedDepartments,
+            EventType = request.EventType ?? EventType.Academic,
         };
         db.Events.Add(newEvent);
         await db.SaveChangesAsync();
 
-        return Ok(new EventDto(newEvent.Id, newEvent.Title, newEvent.StartTime, newEvent.EndTime, false));
+        return Ok(new EventDto(newEvent.Id, newEvent.Title, newEvent.StartTime, newEvent.EndTime, false, newEvent.EventType));
     }
 
     // SDA-20
@@ -70,7 +71,7 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             .ToListAsync();
 
         var events = await EligibleEventsQuery(student.CollegeId, section).ToListAsync();
-        return Ok(events.Select(e => new EventDto(e.Id, e.Title, e.StartTime, e.EndTime, registeredEventIds.Contains(e.Id))).ToList());
+        return Ok(events.Select(e => new EventDto(e.Id, e.Title, e.StartTime, e.EndTime, registeredEventIds.Contains(e.Id), e.EventType)).ToList());
     }
 
     // SDA-20

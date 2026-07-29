@@ -96,6 +96,42 @@ public class CalendarControllerTests
         Assert.Single(await db.Events.ToListAsync());
     }
 
+    // Academic Calendar work: EventType defaults to Academic when omitted, so existing
+    // callers (TWA-15) that don't set it keep working unchanged.
+    [Fact]
+    public async Task CreateEvent_DefaultsToAcademicEventTypeWhenOmitted()
+    {
+        await using var db = NewDb();
+        var creator = NewUser(AccountType.AdminTier);
+        db.Users.Add(creator);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, creator);
+        var start = new DateTime(2026, 8, 1, 10, 0, 0, DateTimeKind.Utc);
+        var result = await controller.CreateEvent(new CreateEventRequest("Orientation", start, start.AddHours(1), null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<EventDto>(ok.Value);
+        Assert.Equal(EventType.Academic, dto.EventType);
+    }
+
+    [Fact]
+    public async Task CreateEvent_CreatesHolidayWhenEventTypeSpecified()
+    {
+        await using var db = NewDb();
+        var creator = NewUser(AccountType.AdminTier);
+        db.Users.Add(creator);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, creator);
+        var start = new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc);
+        var result = await controller.CreateEvent(new CreateEventRequest("Independence Day", start, start.AddDays(1), null, null, EventType.Holiday));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<EventDto>(ok.Value);
+        Assert.Equal(EventType.Holiday, dto.EventType);
+    }
+
     // #159: an undated todo used to be mapped to DateTime.MinValue (0001-01-01), rendering
     // as a ~2000-years-overdue calendar item. It should be omitted from the dated calendar
     // instead.

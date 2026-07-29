@@ -38,4 +38,4 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # False positive: docker-entrypoint.sh itself unconditionally setpriv-drops to $APP_UID
 # before exec'ing the app (see that script's comment) -- root here is transient,
 # container-start-only, never the app's actual runtime user.
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"] # nosemgrep: dockerfile.security.missing-user-entrypoint
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"] # nosemgrep: dockerfile.security.missing-user-entrypoint.missing-user-entrypoint

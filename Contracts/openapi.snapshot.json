@@ -5709,7 +5709,8 @@
           "collegeId",
           "name",
           "hodRoleBindingId",
-          "hodUserId"
+          "hodUserId",
+          "hodUserFullName"
         ],
         "type": "object",
         "properties": {
@@ -5737,6 +5738,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "hodUserFullName": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

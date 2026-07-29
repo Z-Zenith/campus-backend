@@ -192,11 +192,11 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
 
         var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
         var departments = await db.Departments
-            .Include(d => d.HodRoleBinding)
+            .Include(d => d.HodRoleBinding!).ThenInclude(b => b.User)
             .Where(d => d.CollegeId == callerCollegeId)
             .OrderBy(d => d.Name)
             .ToListAsync();
-        return Ok(departments.Select(d => ToDto(d, d.HodRoleBinding?.UserId)).ToList());
+        return Ok(departments.Select(d => ToDto(d, d.HodRoleBinding?.UserId, d.HodRoleBinding?.User.FullName)).ToList());
     }
 
     // AWA-14: rename a department. HoD reassignment already has its own endpoint (AssignHod
@@ -216,7 +216,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
             return BadRequest("Name is required.");
         }
 
-        var department = await db.Departments.Include(d => d.HodRoleBinding).FirstOrDefaultAsync(d => d.Id == id);
+        var department = await db.Departments.Include(d => d.HodRoleBinding!).ThenInclude(b => b.User).FirstOrDefaultAsync(d => d.Id == id);
         if (department is null)
         {
             return NotFound();
@@ -229,7 +229,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         department.Name = request.Name;
         await db.SaveChangesAsync();
 
-        return Ok(ToDto(department, department.HodRoleBinding?.UserId));
+        return Ok(ToDto(department, department.HodRoleBinding?.UserId, department.HodRoleBinding?.User.FullName));
     }
 
     // AWA-14: create a department. Gated to whoever holds manage_departments
@@ -339,13 +339,13 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
 
         await transaction.CommitAsync();
 
-        return Ok(ToDto(department, newBinding.UserId));
+        return Ok(ToDto(department, newBinding.UserId, candidate.FullName));
     }
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 
-    private static DepartmentDto ToDto(Department d, Guid? hodUserId = null) =>
-        new(d.Id, d.CollegeId, d.Name, d.HodRoleBindingId, hodUserId);
+    private static DepartmentDto ToDto(Department d, Guid? hodUserId = null, string? hodUserFullName = null) =>
+        new(d.Id, d.CollegeId, d.Name, d.HodRoleBindingId, hodUserId, hodUserFullName);
 
     private static RoleBindingDto ToDto(RoleBinding b) => new(
         b.Id, b.UserId, b.User.FullName, b.RoleCode, b.ScopeType, b.DepartmentId, b.GrantedAt);

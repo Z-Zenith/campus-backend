@@ -106,6 +106,12 @@ builder.Services.AddHostedService<NoLoginAlertHostedService>();
 // AWA-05
 builder.Services.AddHostedService<FeeReminderHostedService>();
 
+if (builder.Environment.IsDevelopment())
+{
+    // DEV-ONLY: see DevSeedHostedService's doc comment.
+    builder.Services.AddHostedService<DevSeedHostedService>();
+}
+
 // SDA-25: AI Services (Track-2-owned) receives usage telemetry for suspicious-behaviour
 // analysis. Defaults to the docker-compose service name/port if not overridden.
 builder.Services.AddHttpClient("AiServices", client =>

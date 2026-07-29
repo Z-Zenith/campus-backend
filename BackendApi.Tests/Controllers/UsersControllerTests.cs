@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text;
 using BackendApi.Contracts;
 using BackendApi.Controllers;
 using BackendApi.Data;
@@ -13,6 +14,12 @@ namespace BackendApi.Tests.Controllers;
 
 public class UsersControllerTests
 {
+    private static IFormFile CsvFile(string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        return new FormFile(new MemoryStream(bytes), 0, bytes.Length, "file", "import.csv");
+    }
+
     private static AppDbContext NewDb()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -646,5 +653,134 @@ public class UsersControllerTests
         var result = await controller.GetProfile(otherCollegeStudent.Id);
 
         Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // Bulk CSV import — same manage_accounts gate as single-row Create.
+    [Fact]
+    public async Task Import_ForbidsCallerWithoutManageAccountsPermission()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.Import(CsvFile("AccountType,Identifier,InitialPassword,FullName\nStudent,s1,initial-pass1,Student One"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // A 3-row file with one bad row must create the other two, not roll back the whole
+    // upload — the acceptance criterion this feature exists for.
+    [Fact]
+    public async Task Import_CreatesValidRows_AndReportsFailureForBadRow_WithoutFailingTheWholeUpload()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var csv = "AccountType,Identifier,InitialPassword,FullName\n"
+            + "Student,s1,initial-pass1,Student One\n"
+            + "Teacher,t1,weak,Teacher One\n" // fails PasswordPolicy
+            + "Student,s2,initial-pass2,Student Two\n";
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Import(CsvFile(csv));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ImportUsersResponse>(ok.Value);
+        Assert.Equal(3, response.TotalRows);
+        Assert.Equal(2, response.SuccessCount);
+        Assert.Equal(1, response.FailureCount);
+        Assert.Contains(response.Results, r => r.Identifier == "s1" && r.Success);
+        Assert.Contains(response.Results, r => r.Identifier == "s2" && r.Success);
+        Assert.Contains(response.Results, r => r.Identifier == "t1" && !r.Success);
+        Assert.True(await db.Users.AnyAsync(u => u.Identifier == "s1"));
+        Assert.True(await db.Users.AnyAsync(u => u.Identifier == "s2"));
+        Assert.False(await db.Users.AnyAsync(u => u.Identifier == "t1"));
+    }
+
+    [Fact]
+    public async Task Import_RejectsDuplicateIdentifier_AlreadyExistingInCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var existing = NewUser(AccountType.Student, admin.CollegeId);
+        existing.Identifier = "s1";
+        db.Users.AddRange(admin, existing);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Import(CsvFile("AccountType,Identifier,InitialPassword,FullName\nStudent,s1,initial-pass1,Student One"));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ImportUsersResponse>(ok.Value);
+        Assert.Equal(0, response.SuccessCount);
+        Assert.Equal(1, response.FailureCount);
+    }
+
+    // Two rows in the same file sharing an identifier: the first succeeds, the second must
+    // be rejected as a duplicate rather than both landing (would violate the DB's unique
+    // constraint) or the second silently overwriting the first.
+    [Fact]
+    public async Task Import_RejectsDuplicateIdentifier_WithinTheSameFile()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var csv = "AccountType,Identifier,InitialPassword,FullName\n"
+            + "Student,dupe,initial-pass1,First\n"
+            + "Student,dupe,initial-pass2,Second\n";
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Import(CsvFile(csv));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ImportUsersResponse>(ok.Value);
+        Assert.Equal(1, response.SuccessCount);
+        Assert.Equal(1, response.FailureCount);
+        Assert.Equal(1, await db.Users.CountAsync(u => u.Identifier == "dupe"));
+    }
+
+    [Fact]
+    public async Task Import_RejectsUnknownAccountType()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Import(CsvFile("AccountType,Identifier,InitialPassword,FullName\nSuperAdmin,s1,initial-pass1,Student One"));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ImportUsersResponse>(ok.Value);
+        Assert.Equal(0, response.SuccessCount);
+        Assert.Equal(1, response.FailureCount);
+    }
+
+    // Every created row must land in the caller's own college, regardless of anything in
+    // the file — the file has no CollegeId column at all (never taken from the caller).
+    [Fact]
+    public async Task Import_CreatesRowsInCallersOwnCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(new PermissionGrant { Id = Guid.NewGuid(), UserId = admin.Id, PermissionCode = "manage_accounts", Granted = true, GrantedBy = Guid.NewGuid(), CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        await controller.Import(CsvFile("AccountType,Identifier,InitialPassword,FullName\nStudent,s1,initial-pass1,Student One"));
+
+        var created = await db.Users.SingleAsync(u => u.Identifier == "s1");
+        Assert.Equal(admin.CollegeId, created.CollegeId);
     }
 }

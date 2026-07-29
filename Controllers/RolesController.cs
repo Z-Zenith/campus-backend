@@ -178,6 +178,60 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         return NoContent();
     }
 
+    // AWA-14: list departments in the caller's own college. No application-level way to see
+    // existing departments existed before this — DepartmentsPage/SubjectsPage callers had to be
+    // handed a raw department id with no way to look one up.
+    [HttpGet("departments")]
+    public async Task<ActionResult<List<DepartmentDto>>> ListDepartments()
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+        var departments = await db.Departments
+            .Include(d => d.HodRoleBinding!).ThenInclude(b => b.User)
+            .Where(d => d.CollegeId == callerCollegeId)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+        return Ok(departments.Select(d => ToDto(d, d.HodRoleBinding?.UserId, d.HodRoleBinding?.User.FullName)).ToList());
+    }
+
+    // AWA-14: rename a department. HoD reassignment already has its own endpoint (AssignHod
+    // below) — this only ever touches Name, so it can't be used to move a department to a
+    // different college or otherwise bypass the college-scope checks CreateDepartment enforces.
+    [HttpPut("departments/{id}")]
+    public async Task<ActionResult<DepartmentDto>> UpdateDepartment(Guid id, UpdateDepartmentRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            return BadRequest("Name is required.");
+        }
+
+        var department = await db.Departments.Include(d => d.HodRoleBinding!).ThenInclude(b => b.User).FirstOrDefaultAsync(d => d.Id == id);
+        if (department is null)
+        {
+            return NotFound();
+        }
+        if (!await collegeScope.IsSameCollegeAsync(userId, department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        department.Name = request.Name;
+        await db.SaveChangesAsync();
+
+        return Ok(ToDto(department, department.HodRoleBinding?.UserId, department.HodRoleBinding?.User.FullName));
+    }
+
     // AWA-14: create a department. Gated to whoever holds manage_departments
     // (Admin by default; IT can be granted it via a PermissionGrant per Section 9).
     [HttpPost("departments")]
@@ -285,13 +339,13 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
 
         await transaction.CommitAsync();
 
-        return Ok(ToDto(department, newBinding.UserId));
+        return Ok(ToDto(department, newBinding.UserId, candidate.FullName));
     }
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 
-    private static DepartmentDto ToDto(Department d, Guid? hodUserId = null) =>
-        new(d.Id, d.CollegeId, d.Name, d.HodRoleBindingId, hodUserId);
+    private static DepartmentDto ToDto(Department d, Guid? hodUserId = null, string? hodUserFullName = null) =>
+        new(d.Id, d.CollegeId, d.Name, d.HodRoleBindingId, hodUserId, hodUserFullName);
 
     private static RoleBindingDto ToDto(RoleBinding b) => new(
         b.Id, b.UserId, b.User.FullName, b.RoleCode, b.ScopeType, b.DepartmentId, b.GrantedAt);

@@ -5,7 +5,9 @@ namespace BackendApi.Contracts;
 // AWA-14
 public record CreateDepartmentRequest(Guid CollegeId, string Name);
 
-public record DepartmentDto(Guid Id, Guid CollegeId, string Name, Guid? HodRoleBindingId, Guid? HodUserId);
+public record DepartmentDto(Guid Id, Guid CollegeId, string Name, Guid? HodRoleBindingId, Guid? HodUserId, string? HodUserFullName);
+
+public record UpdateDepartmentRequest(string Name);
 
 public record AssignHodRequest(Guid UserId);
 

@@ -71,6 +71,30 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
         return Ok(new FeeLinkResponse(feeRecord.Id, feeRecord.PaymentLink, feeRecord.Amount, feeRecord.DueDate, feeRecord.Status.ToString()));
     }
 
+    // Admin-facing list, college-scoped via the student join (FeeRecord itself carries no
+    // CollegeId). No way to see existing fee links at all existed before this - CreateLink
+    // was write-only from Admin's perspective.
+    [HttpGet]
+    public async Task<ActionResult<List<FeeRecordDto>>> List()
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_fees"))
+        {
+            return Forbid();
+        }
+
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+        var fees = await db.FeeRecords
+            .Include(f => f.Student)
+            .Where(f => f.Student.CollegeId == callerCollegeId)
+            .OrderByDescending(f => f.DueDate)
+            .Select(f => new FeeRecordDto(
+                f.Id, f.StudentId, f.Student.FullName, f.Student.Identifier, f.Amount, f.DueDate, f.Status.ToString(), f.PaidAt))
+            .ToListAsync();
+
+        return Ok(fees);
+    }
+
     // PRT-03 — pays via the (stubbed) Payment Gateway and reflects the confirmed status
     // synchronously, so the parent never needs to check a separate confirmation email.
     [HttpPost("{id}/pay")]

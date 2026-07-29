@@ -3,6 +3,7 @@ using BackendApi.Contracts;
 using BackendApi.Controllers;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,13 +35,24 @@ public class SubjectsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new SubjectsController(db)
+        return new SubjectsController(db, new PermissionService(db), new CollegeScopeService(db))
         {
             ControllerContext = new ControllerContext
             {
                 HttpContext = new DefaultHttpContext { User = principal },
             },
         };
+    }
+
+    private static async Task GrantManageDepartmentsAsync(AppDbContext db, User admin)
+    {
+        var manageDepartmentsPermission = new Permission { Code = "manage_departments", Description = "x" };
+        var role = new Role { Code = "admin_with_departments" };
+        role.PermissionCodes.Add(manageDepartmentsPermission);
+        db.Permissions.Add(manageDepartmentsPermission);
+        db.Roles.Add(role);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin_with_departments", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
     }
 
     private static (Section Section, Subject Subject, User Teacher) SeedTaughtSection(AppDbContext db, User student)
@@ -217,5 +229,185 @@ public class SubjectsControllerTests
         var entry = Assert.Single(subjects);
         Assert.Equal(subject.Id, entry.SubjectId);
         Assert.Equal(canonicalTeacher.Id, entry.TeacherId);
+    }
+
+    // Admin-facing subject management — gap the platform had no feature ID or endpoint for.
+    [Fact]
+    public async Task Create_ForbidsCallerWithoutManageDepartmentsPermission()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(new CreateSubjectRequest(department.Id, "CS101", "Intro to CS", null));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Create_ForbidsCrossCollegeDepartment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var otherCollegeDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "EE" };
+        db.Users.Add(caller);
+        db.Departments.Add(otherCollegeDepartment);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(new CreateSubjectRequest(otherCollegeDepartment.Id, "EE101", "Circuits", null));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Create_RejectsDuplicateCodeWithinSameDepartment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Subjects.Add(new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Existing" });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(new CreateSubjectRequest(department.Id, "CS101", "Intro to CS", null));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Create_RejectsTeacherFromADifferentCollege()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var otherCollegeTeacher = NewUser(AccountType.Teacher);
+        db.Users.AddRange(caller, otherCollegeTeacher);
+        db.Departments.Add(department);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(new CreateSubjectRequest(department.Id, "CS101", "Intro to CS", otherCollegeTeacher.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Create_CreatesSubjectForSameCollegeCaller()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(new CreateSubjectRequest(department.Id, "CS101", "Intro to CS", teacher.Id));
+
+        var ok = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var dto = Assert.IsType<SubjectDto>(ok.Value);
+        Assert.Equal("CS101", dto.Code);
+        Assert.Equal(teacher.Id, dto.CoordinatorId);
+        Assert.Equal("Teacher One", dto.CoordinatorName);
+    }
+
+    [Fact]
+    public async Task List_ReturnsOnlyCallersCollegeSubjects()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var ownDepartment = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "EE" };
+        db.Users.Add(caller);
+        db.Departments.AddRange(ownDepartment, otherDepartment);
+        db.Subjects.Add(new Subject { Id = Guid.NewGuid(), DepartmentId = ownDepartment.Id, Code = "CS101", Name = "Own" });
+        db.Subjects.Add(new Subject { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Code = "EE101", Name = "Other" });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.List(null);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var subjects = Assert.IsType<List<SubjectDto>>(ok.Value);
+        Assert.Single(subjects);
+        Assert.Equal("CS101", subjects[0].Code);
+    }
+
+    [Fact]
+    public async Task Update_RejectsDuplicateCodeAgainstAnotherSubjectInSameDepartment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var existing = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Existing" };
+        var toRename = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS102", Name = "ToRename" };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Subjects.AddRange(existing, toRename);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Update(toRename.Id, new UpdateSubjectRequest("CS101", "Renamed", null));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task Delete_RejectsWhenSubjectHasTimetableSlots()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 1, Name = "1st Year CSE - A" };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Sections.Add(section);
+        db.TimetableSlots.Add(new TimetableSlot
+        {
+            Id = Guid.NewGuid(),
+            SectionId = section.Id,
+            SubjectId = subject.Id,
+            TeacherId = teacher.Id,
+            DayOfWeek = 1,
+            StartTime = new TimeOnly(9, 0),
+            EndTime = new TimeOnly(10, 0),
+        });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Delete(subject.Id);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        Assert.Single(db.Subjects.Local, s => s.Id == subject.Id);
+    }
+
+    [Fact]
+    public async Task Delete_RemovesUnusedSubject()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Delete(subject.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.DoesNotContain(db.Subjects.Local, s => s.Id == subject.Id);
     }
 }

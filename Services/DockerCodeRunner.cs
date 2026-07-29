@@ -59,7 +59,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         // install at run time) — see docker/ts-runner.Dockerfile, built once during setup.
         ["typescript"] = new("campus-ts-runner:local",
             Compile: entry => $"tsc {Quote(entry)}",
-            Run: entry => $"node {Quote(StemFromEntryPath(entry) + ".js")}"),
+            Run: entry => $"node {Quote(Path.ChangeExtension(entry, ".js"))}"),
         // No separate compile step: `dotnet run` builds and runs in one command, so a build
         // failure and a runtime exception both surface as a non-zero exit here. Classified
         // via the "error CS" marker .NET's compiler prints on build errors (see
@@ -73,9 +73,17 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             // silently clobbers the student's actual code when the entry file is *already*
             // named Program.cs — the picker's own default filename for dotnet (see
             // defaultFilenameForLanguage), so this is the common case, not an edge case.
-            Run: entry => $"cp {Quote(entry)} /tmp/__entry.cs && dotnet new console -o . --force >/dev/null 2>&1 && cp /tmp/__entry.cs Program.cs && dotnet run",
+            // The original entry file must also be removed before scaffolding: when it's
+            // named anything other than Program.cs, it otherwise survives alongside the
+            // freshly-written Program.cs, and the SDK-style project's implicit `**/*.cs`
+            // glob compiles both — two files with the same top-level-statement entry point,
+            // a duplicate-entry-point build failure (CS8802-style).
+            Run: entry => $"cp {Quote(entry)} /tmp/__entry.cs && rm -f {Quote(entry)} && dotnet new console -o . --force >/dev/null 2>&1 && cp /tmp/__entry.cs Program.cs && dotnet run",
             RunTimeoutSeconds: 30),
-        ["sql"] = new("keinos/sqlite3:latest", Compile: null, Run: entry => $"sqlite3 :memory: < {Quote(entry)}"),
+        // `.read` (a sqlite3 dot-command passed as a single arg) rather than `< entry` shell
+        // redirection: redirection would occupy sqlite3's own stdin, silently discarding the
+        // caller-supplied `stdin` that RunContainerAsync pipes in for every other language.
+        ["sql"] = new("keinos/sqlite3:latest", Compile: null, Run: entry => $"sqlite3 :memory: {Quote(".read " + entry)}"),
         ["go"] = new("golang:1.22-alpine", Compile: null, Run: entry => $"go run {Quote(entry)}"),
         ["rust"] = new("rust:1-slim",
             Compile: entry => $"rustc -O -o {RunFileName} {Quote(entry)}",
@@ -197,15 +205,41 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         return "runtime_error";
     }
 
+    // Docker-outside-of-Docker: when backend-api itself runs as a container (see
+    // docker-compose.yml's backend-api service), `docker run`/`docker exec` here talk to the
+    // HOST's daemon over its bind-mounted socket — which resolves `-v` bind-mount sources
+    // against the HOST's filesystem, not this process's own container filesystem. So the
+    // workdir this process writes files into (container-local) and the path string handed to
+    // `docker run -v` (must be host-visible) are two different things whenever this env var
+    // is set. Unset in the bare `dotnet run` dev setup (the default today), where this
+    // process's filesystem IS the host filesystem and no translation is needed. See
+    // docker-compose.yml's CodeRunner__HostTempDir for the operator-supplied host-side path
+    // this pairs with, and ContainerCodeRunRoot below for the fixed container-side mount point
+    // it corresponds to.
+    private static readonly string? HostTempDirRoot = Environment.GetEnvironmentVariable("CodeRunner__HostTempDir");
+
+    // Fixed container-side mount point for docker-compose.yml's coderun-tmp bind mount — only
+    // meaningful (and only where CreateWorkDir writes) when HostTempDirRoot is set.
+    private const string ContainerCodeRunRoot = "/coderun-tmp";
+
     // internal rather than private: TerminalSessionService reuses these three for the
     // same "materialize a CodeProject onto disk for a container mount" need, rather than
     // duplicating them.
     internal static string CreateWorkDir()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "campus-coderun-" + Guid.NewGuid().ToString("N"));
+        var root = HostTempDirRoot is not null ? ContainerCodeRunRoot : Path.GetTempPath();
+        var dir = Path.Combine(root, "campus-coderun-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return dir;
     }
+
+    // Translates a CreateWorkDir()-produced path to whatever string `docker run -v` needs to
+    // see it correctly on the host — itself unchanged when HostTempDirRoot isn't set (see
+    // CreateWorkDir's comment). internal rather than private: TerminalSessionService builds
+    // its own `docker run -v` args directly (not through BuildDockerArgs) and needs the same
+    // translation for its workspace mount.
+    internal static string ToHostVisiblePath(string workDir) =>
+        HostTempDirRoot is null ? workDir : $"{HostTempDirRoot.TrimEnd('/', '\\')}/{Path.GetFileName(workDir)}";
 
     internal static void TryDeleteWorkDir(string workDir)
     {
@@ -254,7 +288,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var arg in BuildDockerArgs(image, workDir, command, timeoutSeconds, memoryMb))
+        foreach (var arg in BuildDockerArgs(image, ToHostVisiblePath(workDir), command, timeoutSeconds, memoryMb))
         {
             psi.ArgumentList.Add(arg);
         }

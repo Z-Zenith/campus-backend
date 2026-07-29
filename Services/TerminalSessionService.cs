@@ -47,7 +47,7 @@ public sealed class TerminalSessionService(ILogger<TerminalSessionService> logge
                 "--memory-swap", "512m",
                 "--pids-limit", "128",
                 "--cpus", "1.0",
-                "-v", $"{workDir}:/box",
+                "-v", $"{DockerCodeRunner.ToHostVisiblePath(workDir)}:/box",
                 "-w", "/box",
                 Image,
                 "tail", "-f", "/dev/null",

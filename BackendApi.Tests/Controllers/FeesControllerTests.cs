@@ -582,4 +582,43 @@ public class FeesControllerTests
         Assert.Equal(1, response.RemindersSent);
         Assert.Single(await db.Notifications.Where(n => n.RecipientId == parent.Id).ToListAsync());
     }
+
+    // Admin-facing list — there was no way to see existing fee links at all before this.
+    [Fact]
+    public async Task List_ForbidsCallerWithoutManageFeesPermission()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        db.Users.Add(caller);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.List();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task List_ReturnsOnlyCallersCollegeFeeRecords()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var ownStudent = NewUser(AccountType.Student, admin.CollegeId);
+        var otherCollegeStudent = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, ownStudent, otherCollegeStudent);
+        db.PermissionGrants.Add(GrantManageFees(admin.Id));
+        db.FeeRecords.AddRange(
+            new FeeRecord { Id = Guid.NewGuid(), StudentId = ownStudent.Id, Amount = 1000m, DueDate = DateOnly.FromDateTime(DateTime.UtcNow), Status = FeeStatus.Pending },
+            new FeeRecord { Id = Guid.NewGuid(), StudentId = otherCollegeStudent.Id, Amount = 2000m, DueDate = DateOnly.FromDateTime(DateTime.UtcNow), Status = FeeStatus.Pending });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.List();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var fees = Assert.IsType<List<FeeRecordDto>>(ok.Value);
+        Assert.Single(fees);
+        Assert.Equal(ownStudent.Id, fees[0].StudentId);
+        Assert.Equal(ownStudent.FullName, fees[0].StudentFullName);
+    }
 }

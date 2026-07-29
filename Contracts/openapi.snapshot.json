@@ -726,6 +726,35 @@
         }
       }
     },
+    "/api/v1/whitelist/defaults/engineering": {
+      "post": {
+        "tags": [
+          "Browsing"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddDefaultSitesResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddDefaultSitesResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddDefaultSitesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/students/{id}/browsing-summary": {
       "get": {
         "tags": [
@@ -1883,6 +1912,44 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FeeLinkResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/fees": {
+      "get": {
+        "tags": [
+          "Fees"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeeRecordDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeeRecordDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeeRecordDto"
+                  }
                 }
               }
             }
@@ -3590,6 +3657,138 @@
         }
       }
     },
+    "/api/v1/terminal/start": {
+      "post": {
+        "tags": [
+          "Terminal"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalStartRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalStartRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalStartResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalStartResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalStartResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/terminal/{sessionId}/exec": {
+      "post": {
+        "tags": [
+          "Terminal"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalExecRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalExecRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalExecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalExecResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalExecResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalExecResultDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/terminal/{sessionId}/close": {
+      "post": {
+        "tags": [
+          "Terminal"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/timetable/generate": {
       "post": {
         "tags": [
@@ -4253,6 +4452,27 @@
           "Parent"
         ],
         "type": "string"
+      },
+      "AddDefaultSitesResponse": {
+        "required": [
+          "added",
+          "alreadyWhitelisted"
+        ],
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WhitelistSiteDto"
+            }
+          },
+          "alreadyWhitelisted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "ApproveExternalMarkResponse": {
         "required": [
@@ -5632,6 +5852,57 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "FeeRecordDto": {
+        "required": [
+          "id",
+          "studentId",
+          "studentFullName",
+          "studentIdentifier",
+          "amount",
+          "dueDate",
+          "status",
+          "paidAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentFullName": {
+            "type": "string"
+          },
+          "studentIdentifier": {
+            "type": "string"
+          },
+          "amount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "dueDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },
@@ -7474,6 +7745,67 @@
           }
         }
       },
+      "TerminalExecRequest": {
+        "required": [
+          "command"
+        ],
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        }
+      },
+      "TerminalExecResultDto": {
+        "required": [
+          "stdout",
+          "stderr",
+          "exitCode"
+        ],
+        "type": "object",
+        "properties": {
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "exitCode": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "TerminalStartRequest": {
+        "required": [
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          }
+        }
+      },
+      "TerminalStartResponse": {
+        "required": [
+          "sessionId"
+        ],
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ThreadSummaryResponse": {
         "required": [
           "id",
@@ -7865,6 +8197,9 @@
     },
     {
       "name": "Telemetry"
+    },
+    {
+      "name": "Terminal"
     },
     {
       "name": "Timetable"

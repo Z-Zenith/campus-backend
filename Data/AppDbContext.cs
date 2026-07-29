@@ -34,6 +34,10 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<CopyCheckFlag> CopyCheckFlags { get; set; }
 
+    public virtual DbSet<CurriculumChapter> CurriculumChapters { get; set; }
+
+    public virtual DbSet<CurriculumUnit> CurriculumUnits { get; set; }
+
     public virtual DbSet<CustomCalendarEntry> CustomCalendarEntries { get; set; }
 
     public virtual DbSet<Department> Departments { get; set; }
@@ -77,6 +81,10 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<PermissionGrant> PermissionGrants { get; set; }
 
     public virtual DbSet<PlagiarismReport> PlagiarismReports { get; set; }
+
+    public virtual DbSet<Regulation> Regulations { get; set; }
+
+    public virtual DbSet<RegulationSubjectOffering> RegulationSubjectOfferings { get; set; }
 
     public virtual DbSet<Role> Roles { get; set; }
 
@@ -259,6 +267,24 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.SubmissionA).WithMany(p => p.CopyCheckFlagSubmissionAs).HasConstraintName("copy_check_flags_submission_a_id_fkey");
 
             entity.HasOne(d => d.SubmissionB).WithMany(p => p.CopyCheckFlagSubmissionBs).HasConstraintName("copy_check_flags_submission_b_id_fkey");
+        });
+
+        modelBuilder.Entity<CurriculumChapter>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("curriculum_chapters_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+
+            entity.HasOne(d => d.Unit).WithMany(p => p.CurriculumChapters).HasConstraintName("curriculum_chapters_unit_id_fkey");
+        });
+
+        modelBuilder.Entity<CurriculumUnit>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("curriculum_units_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+
+            entity.HasOne(d => d.Offering).WithMany(p => p.CurriculumUnits).HasConstraintName("curriculum_units_offering_id_fkey");
         });
 
         modelBuilder.Entity<CustomCalendarEntry>(entity =>
@@ -543,6 +569,28 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.CheckedAt).HasDefaultValueSql("now()");
 
             entity.HasOne(d => d.Submission).WithMany(p => p.PlagiarismReports).HasConstraintName("plagiarism_reports_submission_id_fkey");
+        });
+
+        modelBuilder.Entity<Regulation>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("regulations_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+
+            entity.HasOne(d => d.Department).WithMany(p => p.Regulations).HasConstraintName("regulations_department_id_fkey");
+        });
+
+        modelBuilder.Entity<RegulationSubjectOffering>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("regulation_subject_offerings_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.MinAttendancePercent).HasDefaultValue(75.0m);
+
+            entity.HasOne(d => d.Regulation).WithMany(p => p.RegulationSubjectOfferings).HasConstraintName("regulation_subject_offerings_regulation_id_fkey");
+
+            entity.HasOne(d => d.Subject).WithMany(p => p.RegulationSubjectOfferings).HasConstraintName("regulation_subject_offerings_subject_id_fkey");
         });
 
         modelBuilder.Entity<Role>(entity =>

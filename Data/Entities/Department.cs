@@ -31,6 +31,9 @@ public partial class Department
     public virtual RoleBinding? HodRoleBinding { get; set; }
 
     [InverseProperty("Department")]
+    public virtual ICollection<Regulation> Regulations { get; set; } = new List<Regulation>();
+
+    [InverseProperty("Department")]
     public virtual ICollection<RoleBinding> RoleBindings { get; set; } = new List<RoleBinding>();
 
     [InverseProperty("Department")]

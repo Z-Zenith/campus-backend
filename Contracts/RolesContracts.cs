@@ -7,6 +7,8 @@ public record CreateDepartmentRequest(Guid CollegeId, string Name);
 
 public record DepartmentDto(Guid Id, Guid CollegeId, string Name, Guid? HodRoleBindingId, Guid? HodUserId);
 
+public record UpdateDepartmentRequest(string Name);
+
 public record AssignHodRequest(Guid UserId);
 
 public record CreateRoleBindingRequest(Guid UserId, string RoleCode, ScopeKind ScopeType, Guid? DepartmentId);

@@ -235,4 +235,128 @@ public class RolesControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
     }
+
+    // AWA-14
+    [Fact]
+    public async Task ListDepartments_ForbidsCallerWithoutManageDepartmentsPermission()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var caller = NewUser();
+        db.Users.Add(caller);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller.Id);
+        var result = await controller.ListDepartments();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // AWA-14 — #127-class check: only the caller's own college's departments should be
+    // returned, mirroring ListRoleBindings/ListPermissionGrants above.
+    [Fact]
+    public async Task ListDepartments_ReturnsOnlyCallersCollegeDepartments()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var manageDepartmentsPermission = new Permission { Code = "manage_departments", Description = "x" };
+        var admin = new Role { Code = "admin_with_departments" };
+        admin.PermissionCodes.Add(manageDepartmentsPermission);
+        db.Permissions.Add(manageDepartmentsPermission);
+        db.Roles.Add(admin);
+
+        var caller = NewUser();
+        var ownCollege = new College { Id = caller.CollegeId, Name = "Own College" };
+        var otherCollege = new College { Id = Guid.NewGuid(), Name = "Other College" };
+        var ownDepartment = new Department { Id = Guid.NewGuid(), CollegeId = ownCollege.Id, Name = "CS" };
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = otherCollege.Id, Name = "EE" };
+        db.Users.Add(caller);
+        db.Colleges.AddRange(ownCollege, otherCollege);
+        db.Departments.AddRange(ownDepartment, otherDepartment);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = caller.Id, RoleCode = "admin_with_departments", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller.Id);
+        var result = await controller.ListDepartments();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var departments = Assert.IsType<List<DepartmentDto>>(ok.Value);
+        Assert.Single(departments);
+        Assert.Equal(ownDepartment.Id, departments[0].Id);
+    }
+
+    [Fact]
+    public async Task UpdateDepartment_ForbidsCallerWithoutManageDepartmentsPermission()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var caller = NewUser();
+        var college = new College { Id = Guid.NewGuid(), Name = "Test College" };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = college.Id, Name = "CS" };
+        db.Users.Add(caller);
+        db.Colleges.Add(college);
+        db.Departments.Add(department);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller.Id);
+        var result = await controller.UpdateDepartment(department.Id, new UpdateDepartmentRequest("Computer Science"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // #127-class check: an admin at one college must not be able to rename a department at
+    // a different college.
+    [Fact]
+    public async Task UpdateDepartment_ForbidsCrossCollegeTarget()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var manageDepartmentsPermission = new Permission { Code = "manage_departments", Description = "x" };
+        var admin = new Role { Code = "admin_with_departments" };
+        admin.PermissionCodes.Add(manageDepartmentsPermission);
+        db.Permissions.Add(manageDepartmentsPermission);
+        db.Roles.Add(admin);
+
+        var caller = NewUser();
+        var otherCollege = new College { Id = Guid.NewGuid(), Name = "Other College" };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = otherCollege.Id, Name = "EE" };
+        db.Users.Add(caller);
+        db.Colleges.Add(otherCollege);
+        db.Departments.Add(department);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = caller.Id, RoleCode = "admin_with_departments", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller.Id);
+        var result = await controller.UpdateDepartment(department.Id, new UpdateDepartmentRequest("Renamed"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task UpdateDepartment_RenamesDepartmentForSameCollegeCaller()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var manageDepartmentsPermission = new Permission { Code = "manage_departments", Description = "x" };
+        var admin = new Role { Code = "admin_with_departments" };
+        admin.PermissionCodes.Add(manageDepartmentsPermission);
+        db.Permissions.Add(manageDepartmentsPermission);
+        db.Roles.Add(admin);
+
+        var caller = NewUser();
+        var college = new College { Id = caller.CollegeId, Name = "Own College" };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = college.Id, Name = "CS" };
+        db.Users.Add(caller);
+        db.Colleges.Add(college);
+        db.Departments.Add(department);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = caller.Id, RoleCode = "admin_with_departments", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller.Id);
+        var result = await controller.UpdateDepartment(department.Id, new UpdateDepartmentRequest("Computer Science"));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<DepartmentDto>(ok.Value);
+        Assert.Equal("Computer Science", dto.Name);
+    }
 }

@@ -269,7 +269,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
             Id = Guid.NewGuid(),
             TeacherId = userId,
             Description = request.Description,
-            Status = "pending",
+            Status = TimetableChangeRequestStatus.Pending,
         };
         db.TimetableChangeRequests.Add(changeRequest);
         await db.SaveChangesAsync();
@@ -295,7 +295,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
             }
         }
 
-        return Ok(new ChangeRequestDto(changeRequest.Id, changeRequest.Description, changeRequest.Status, changeRequest.RequestedAt));
+        return Ok(new ChangeRequestDto(changeRequest.Id, changeRequest.Description, changeRequest.Status.ToString(), changeRequest.RequestedAt));
     }
 
     // TWA-08 — roster for the attendance-marking form; scoped the same way as marking

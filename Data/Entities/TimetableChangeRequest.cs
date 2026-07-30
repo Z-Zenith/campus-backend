@@ -20,7 +20,7 @@ public partial class TimetableChangeRequest
     public string Description { get; set; } = null!;
 
     [Column("status")]
-    public string Status { get; set; } = null!;
+    public TimetableChangeRequestStatus Status { get; set; }
 
     [Column("requested_at")]
     public DateTime RequestedAt { get; set; }

@@ -60,13 +60,47 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         {
             return BadRequest("Unknown role code.");
         }
-        if (request.ScopeType == ScopeKind.Department && request.DepartmentId is null)
+        if (request.ScopeType == ScopeKind.Department && (request.DepartmentId is null || request.SectionId is not null))
         {
-            return BadRequest("DepartmentId is required for a department-scoped binding.");
+            return BadRequest("DepartmentId (and only DepartmentId) is required for a department-scoped binding.");
         }
-        if (request.ScopeType == ScopeKind.Global && request.DepartmentId is not null)
+        if (request.ScopeType == ScopeKind.Global && (request.DepartmentId is not null || request.SectionId is not null))
         {
-            return BadRequest("DepartmentId must be null for a global-scoped binding.");
+            return BadRequest("DepartmentId and SectionId must both be null for a global-scoped binding.");
+        }
+        if (request.ScopeType == ScopeKind.Section && (request.SectionId is null || request.DepartmentId is not null))
+        {
+            return BadRequest("SectionId (and only SectionId) is required for a section-scoped binding.");
+        }
+
+        Guid? sectionCollegeId = null;
+        if (request.SectionId is { } sectionId)
+        {
+            sectionCollegeId = await db.Sections
+                .Where(s => s.Id == sectionId)
+                .Select(s => (Guid?)s.Department.CollegeId)
+                .FirstOrDefaultAsync();
+            if (sectionCollegeId is null)
+            {
+                return BadRequest("Unknown section.");
+            }
+            if (!await collegeScope.IsSameCollegeAsync(userId, sectionCollegeId.Value))
+            {
+                return Forbid();
+            }
+
+            // class_teacher: at most 2 active bindings per section (checked at this
+            // granularity - RoleCode/ScopeType, not just SectionId - so a future
+            // section-scoped role with a different cap doesn't inherit this one).
+            if (request.RoleCode == "class_teacher")
+            {
+                var existingClassTeachers = await db.RoleBindings
+                    .CountAsync(b => b.SectionId == sectionId && b.RoleCode == "class_teacher");
+                if (existingClassTeachers >= 2)
+                {
+                    return Conflict(new { error = "class_teacher_limit_reached", message = "This section already has 2 class teachers assigned." });
+                }
+            }
         }
 
         var binding = new RoleBinding
@@ -76,6 +110,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
             RoleCode = request.RoleCode,
             ScopeType = request.ScopeType,
             DepartmentId = request.DepartmentId,
+            SectionId = request.SectionId,
             GrantedAt = DateTime.UtcNow,
         };
         db.RoleBindings.Add(binding);
@@ -294,7 +329,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         new(d.Id, d.CollegeId, d.Name, d.HodRoleBindingId, hodUserId);
 
     private static RoleBindingDto ToDto(RoleBinding b) => new(
-        b.Id, b.UserId, b.User.FullName, b.RoleCode, b.ScopeType, b.DepartmentId, b.GrantedAt);
+        b.Id, b.UserId, b.User.FullName, b.RoleCode, b.ScopeType, b.DepartmentId, b.SectionId, b.GrantedAt);
 
     private static PermissionGrantDto ToDto(PermissionGrant g) => new(
         g.Id, g.UserId, g.User.FullName, g.PermissionCode, g.Granted, g.ExpiresAt, g.GrantedBy, g.CreatedAt);

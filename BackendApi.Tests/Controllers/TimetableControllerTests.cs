@@ -21,6 +21,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     // #159: Generate() gates on "create_timetable" — a variant of the fake above that
@@ -29,6 +30,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     // #159: records LogWarning calls so tests can assert Generate() surfaces skipped
@@ -362,6 +364,27 @@ public class TimetableControllerTests
         }
     }
 
+    // Phase 9 - a class_teacher holding section-oversight scope may mark attendance for a
+    // slot even though they don't personally teach that period.
+    [Fact]
+    public async Task MarkAttendance_AllowsCallerWithSectionOversightScope_EvenIfNotTheSlotsTeacher()
+    {
+        await using var db = NewDb();
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var fixture = await SeedSectionAsync(db, slotTeacher, studentCount: 2);
+        var classTeacher = NewUser(AccountType.Teacher);
+        db.Users.Add(classTeacher);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, classTeacher, new FakeSectionOversightPermissionService(fixture.Slot.SectionId));
+        var entries = fixture.Students.Select(s => new AttendanceEntryRequest(s.Id, "Present")).ToList();
+        var result = await controller.MarkAttendance(new MarkAttendanceRequest(fixture.Slot.Id, new DateOnly(2026, 7, 6), entries));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<MarkAttendanceResponse>(ok.Value);
+        Assert.Equal(2, response.Records.Count);
+    }
+
     // #152 — when SessionDate is omitted, the session date must be derived from the
     // teacher's college's local time zone (via CollegeClock), not raw UTC, so marking
     // attendance near local midnight doesn't roll over to the wrong calendar day.
@@ -687,6 +710,7 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     private static TimetableController GlobalCallerController(AppDbContext db, User caller)
@@ -1062,5 +1086,115 @@ public class TimetableControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(departmentId);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+    }
+
+    // Phase 9 - a class_teacher holding section-oversight scope for a specific section
+    // (may not personally teach any period in it at all).
+    private class FakeSectionOversightPermissionService(Guid sectionId) : IPermissionService
+    {
+        public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
+        public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(sectionId);
+    }
+
+    [Fact]
+    public async Task Roster_AllowsCallerWithSectionOversightScope_EvenIfNotTheSlotsTeacher()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var classTeacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = slotTeacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.AddRange(slotTeacher, classTeacher, student);
+        db.TimetableSlots.Add(slot);
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, classTeacher, new FakeSectionOversightPermissionService(section.Id));
+        var result = await controller.Roster(slot.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var roster = Assert.IsType<List<RosterStudentDto>>(ok.Value);
+        Assert.Single(roster);
+    }
+
+    [Fact]
+    public async Task Roster_ForbidsSectionOversightScope_ForADifferentSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var otherSection = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var classTeacher = NewUser(AccountType.Teacher);
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = slotTeacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        db.Departments.Add(department);
+        db.Sections.AddRange(section, otherSection);
+        db.Subjects.Add(subject);
+        db.Users.AddRange(slotTeacher, classTeacher);
+        db.TimetableSlots.Add(slot);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, classTeacher, new FakeSectionOversightPermissionService(otherSection.Id));
+        var result = await controller.Roster(slot.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task GetSectionPerformanceSummary_WithSectionOversight_CoversEverySubjectTaughtToTheSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subjectA = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var subjectB = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS102", Name = "Data Structures" };
+        var teacherA = NewUser(AccountType.Teacher);
+        var teacherB = NewUser(AccountType.Teacher);
+        var classTeacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.AddRange(subjectA, subjectB);
+        db.Users.AddRange(teacherA, teacherB, classTeacher, student);
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacherA.Id, SectionId = section.Id, SubjectId = subjectA.Id });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacherB.Id, SectionId = section.Id, SubjectId = subjectB.Id });
+        db.InternalMarks.Add(new InternalMark { Id = Guid.NewGuid(), StudentId = student.Id, SubjectId = subjectA.Id, Marks = 80 });
+        db.InternalMarks.Add(new InternalMark { Id = Guid.NewGuid(), StudentId = student.Id, SubjectId = subjectB.Id, Marks = 90 });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, classTeacher, new FakeSectionOversightPermissionService(section.Id));
+        var result = await controller.GetSectionPerformanceSummary(section.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<SectionPerformanceSummaryDto>(ok.Value);
+        Assert.Equal(2, dto.MarksBySubject.Count);
+    }
+
+    [Fact]
+    public async Task GetSectionPerformanceSummary_WithoutOversightOrOwnAssignment_Forbids()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var outsider = NewUser(AccountType.Teacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Users.Add(outsider);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, outsider);
+        var result = await controller.GetSectionPerformanceSummary(section.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
     }
 }

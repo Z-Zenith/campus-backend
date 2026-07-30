@@ -12,8 +12,14 @@ DO $$ BEGIN
     CREATE TYPE account_type AS ENUM ('student', 'teacher', 'admin_tier', 'parent');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- 'section' added for class_teacher-style section-scoped role bindings (2 per section,
+-- full attendance/marks oversight across every period/subject - narrower than
+-- 'department', which today is as granular as scope gets). Pending: the corresponding
+-- class_teacher role + view_section_oversight permission must be added to the
+-- architecture doc's Section 9 catalog before 02_seed_roles_and_permissions.sql can
+-- reference them (per that file's own anti-drift instruction) - not done in this PR.
 DO $$ BEGIN
-    CREATE TYPE scope_kind AS ENUM ('global', 'department');
+    CREATE TYPE scope_kind AS ENUM ('global', 'department', 'section');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -122,17 +128,15 @@ CREATE TABLE IF NOT EXISTS role_default_permissions (
     PRIMARY KEY (role_code, permission_code)
 );
 
+-- section_id (nullable, added below once `sections` exists) mirrors department_id's
+-- existing pattern for class_teacher-style section-scoped bindings.
 CREATE TABLE IF NOT EXISTS role_bindings (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role_code     text NOT NULL REFERENCES roles(code) ON DELETE RESTRICT,
     scope_type    scope_kind NOT NULL,
     department_id uuid REFERENCES departments(id) ON DELETE RESTRICT,
-    granted_at    timestamptz NOT NULL DEFAULT now(),
-    CHECK (
-        (scope_type = 'department' AND department_id IS NOT NULL) OR
-        (scope_type = 'global'     AND department_id IS NULL)
-    )
+    granted_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- Now that role_bindings exists, wire up departments.hod_role_binding_id
@@ -259,6 +263,21 @@ CREATE TABLE IF NOT EXISTS section_enrollments (
     student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE (section_id, student_id)
 );
+
+-- Now that sections exists: role_bindings' section_id column + the 3-way scope/target
+-- CHECK, deferred from role_bindings' own CREATE TABLE above (same deferred-FK pattern
+-- already used for departments_hod_fk below).
+DO $$ BEGIN
+    ALTER TABLE role_bindings ADD COLUMN section_id uuid REFERENCES sections(id) ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE role_bindings ADD CONSTRAINT role_bindings_scope_target_check CHECK (
+        (scope_type = 'department' AND department_id IS NOT NULL AND section_id IS NULL) OR
+        (scope_type = 'section'    AND section_id IS NOT NULL AND department_id IS NULL) OR
+        (scope_type = 'global'     AND department_id IS NULL AND section_id IS NULL)
+    );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS teacher_section_assignments (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

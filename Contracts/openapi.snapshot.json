@@ -7482,6 +7482,13 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "sectionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -9224,6 +9231,7 @@
           "roleCode",
           "scopeType",
           "departmentId",
+          "sectionId",
           "grantedAt"
         ],
         "type": "object",
@@ -9246,6 +9254,13 @@
             "$ref": "#/components/schemas/ScopeKind"
           },
           "departmentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "sectionId": {
             "type": [
               "null",
               "string"
@@ -9329,7 +9344,8 @@
       "ScopeKind": {
         "enum": [
           "Global",
-          "Department"
+          "Department",
+          "Section"
         ],
         "type": "string"
       },

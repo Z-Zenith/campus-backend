@@ -9,7 +9,9 @@ public record DepartmentDto(Guid Id, Guid CollegeId, string Name, Guid? HodRoleB
 
 public record AssignHodRequest(Guid UserId);
 
-public record CreateRoleBindingRequest(Guid UserId, string RoleCode, ScopeKind ScopeType, Guid? DepartmentId);
+// SectionId is populated for Section-scoped bindings (e.g. class_teacher) - mirrors
+// DepartmentId's existing nullable-pair pattern, see role_bindings' 3-way CHECK constraint.
+public record CreateRoleBindingRequest(Guid UserId, string RoleCode, ScopeKind ScopeType, Guid? DepartmentId, Guid? SectionId = null);
 
 public record RoleBindingDto(
     Guid Id,
@@ -18,6 +20,7 @@ public record RoleBindingDto(
     string RoleCode,
     ScopeKind ScopeType,
     Guid? DepartmentId,
+    Guid? SectionId,
     DateTime GrantedAt);
 
 public record CreatePermissionGrantRequest(Guid UserId, string PermissionCode, bool Granted, DateTime? ExpiresAt);

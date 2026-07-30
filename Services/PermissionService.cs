@@ -40,4 +40,13 @@ public class PermissionService(AppDbContext db) : IPermissionService
 
         return hodBinding?.DepartmentId;
     }
+
+    public async Task<Guid?> GetSectionOversightScopeAsync(Guid userId)
+    {
+        var classTeacherBinding = await db.RoleBindings
+            .Where(b => b.UserId == userId && b.RoleCode == "class_teacher" && b.SectionId != null)
+            .FirstOrDefaultAsync();
+
+        return classTeacherBinding?.SectionId;
+    }
 }

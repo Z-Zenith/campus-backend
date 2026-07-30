@@ -63,3 +63,31 @@ The init scripts only run on a fresh data directory. To re-apply after editing
 ```bash
 docker compose down -v && docker compose up -d postgres
 ```
+
+This still works for a genuine fresh start, but as of the `InitialBaseline` EF Core migration
+(see `MIGRATIONS.md`) it's no longer the only option for picking up a schema change on an
+**existing** local dev database — see below.
+
+## Applying a schema change without wiping your data
+
+For a local `dotnet run` (connects as `campus`, the only role with DDL rights — the
+containerized `backend-api` connects as `campus_app`, which is DML-only and can't run
+migrations, see `db/init/03_create_app_role.sh`):
+
+```bash
+dotnet ef migrations add <Name>      # after changing Data/Entities/*.cs (re-scaffolded, not hand-edited)
+dotnet ef database update            # applies just the new migration(s) to your existing DB
+```
+
+**One-time step if your local database predates this migration adoption:** before the first
+`dotnet ef database update` against it, insert the baseline row by hand so EF Core doesn't try
+to re-create tables that already exist:
+
+```sql
+INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+VALUES ('20260730223702_InitialBaseline', '10.0.9')
+ON CONFLICT ("MigrationId") DO NOTHING;
+```
+
+(A fresh `docker compose up -d postgres` doesn't need this — `db/init/04_seed_ef_migrations_history.sql`
+already inserts it as part of the normal init sequence.)

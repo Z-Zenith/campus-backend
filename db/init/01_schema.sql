@@ -51,6 +51,17 @@ DO $$ BEGIN
     CREATE TYPE ocr_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'not_applicable');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- ─── Audit: updated_at auto-maintenance ───────────────────────────────────────
+-- Attached (see the DO block at the end of this file) to every table below that has an
+-- updated_at column, whoever added it and whenever -- keeps this file re-runnable and
+-- avoids every schema-touching PR needing to edit one shared hotspot.
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ─── 1.1 Tenancy & Identity ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS colleges (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -59,14 +70,16 @@ CREATE TABLE IF NOT EXISTS colleges (
     -- this college's local time rather than raw UTC (#152) -- attendance marking and fee
     -- due-date checks must not roll over to the wrong calendar day near local midnight.
     time_zone   text NOT NULL DEFAULT 'UTC',
-    created_at  timestamptz NOT NULL DEFAULT now()
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS departments (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     college_id          uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
     name                text NOT NULL,
-    hod_role_binding_id uuid  -- FK to role_bindings added after that table exists
+    hod_role_binding_id uuid,  -- FK to role_bindings added after that table exists
+    updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -81,6 +94,7 @@ CREATE TABLE IF NOT EXISTS users (
     date_of_birth   date,                   -- PRT-01: students only, used as the parent-login credential
     is_active       boolean NOT NULL DEFAULT true,
     created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
     UNIQUE (college_id, identifier)
 );
 
@@ -146,12 +160,16 @@ CREATE TABLE IF NOT EXISTS permission_grants (
 CREATE INDEX IF NOT EXISTS idx_permission_grants_user
     ON permission_grants (user_id, permission_code);
 
+-- is_active is flipped false on login/logout/password-change (AuthController,
+-- ParentController, UsersController), so this row is genuinely mutated post-insert,
+-- not just appended/deleted like most other auth-adjacent tables.
 CREATE TABLE IF NOT EXISTS user_sessions (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_info text,
     is_active   boolean NOT NULL DEFAULT true,   -- API-01: one active row per user
-    created_at  timestamptz NOT NULL DEFAULT now()
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_user_active_session
     ON user_sessions (user_id) WHERE is_active = true;
@@ -165,6 +183,7 @@ CREATE TABLE IF NOT EXISTS subjects (
     code          text NOT NULL,
     name          text NOT NULL,
     teacher_id    uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (department_id, code)
 );
 
@@ -172,7 +191,8 @@ CREATE TABLE IF NOT EXISTS sections (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     department_id uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
     year          int  NOT NULL,
-    name          text NOT NULL
+    name          text NOT NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_sections_dept_year
     ON sections (department_id, year);
@@ -183,6 +203,8 @@ CREATE TABLE IF NOT EXISTS section_enrollments (
     student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE (section_id, student_id)
 );
+CREATE INDEX IF NOT EXISTS idx_section_enrollments_student
+    ON section_enrollments (student_id);
 
 CREATE TABLE IF NOT EXISTS teacher_section_assignments (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -202,6 +224,7 @@ CREATE TABLE IF NOT EXISTS timetable_slots (
     end_time        time NOT NULL,
     room            text,
     manually_edited boolean NOT NULL DEFAULT false,
+    updated_at      timestamptz NOT NULL DEFAULT now(),
     CHECK (end_time > start_time)
 );
 CREATE INDEX IF NOT EXISTS idx_timetable_slots_section
@@ -212,8 +235,11 @@ CREATE TABLE IF NOT EXISTS class_sessions (
     timetable_slot_id  uuid NOT NULL REFERENCES timetable_slots(id) ON DELETE CASCADE,
     session_date       date NOT NULL,
     actual_teacher_id  uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at         timestamptz NOT NULL DEFAULT now(),
     UNIQUE (timetable_slot_id, session_date)
 );
+CREATE INDEX IF NOT EXISTS idx_class_sessions_actual_teacher
+    ON class_sessions (actual_teacher_id);
 
 -- ─── 1.3 Attendance ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS attendance_records (
@@ -238,6 +264,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     submission_window_start  timestamptz NOT NULL,
     submission_window_end    timestamptz NOT NULL,
     type_specific_settings   jsonb,
+    updated_at               timestamptz NOT NULL DEFAULT now(),
     CHECK (submission_window_end >= submission_window_start)
 );
 
@@ -293,7 +320,8 @@ CREATE TABLE IF NOT EXISTS autograde_suggestions (
     matched_criteria       jsonb,
     feedback               jsonb,
     confirmed_by_teacher   boolean NOT NULL DEFAULT false,
-    confirmed_at           timestamptz
+    confirmed_at           timestamptz,
+    updated_at             timestamptz NOT NULL DEFAULT now()
 );
 
 -- ─── 1.5 Marks ────────────────────────────────────────────────────────────────
@@ -305,7 +333,8 @@ CREATE TABLE IF NOT EXISTS internal_marks (
     marks         numeric NOT NULL,
     published     boolean NOT NULL DEFAULT false,
     published_at  timestamptz,
-    published_by  uuid REFERENCES users(id) ON DELETE SET NULL
+    published_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_internal_marks_student_subject
     ON internal_marks (student_id, subject_id);
@@ -321,6 +350,7 @@ CREATE TABLE IF NOT EXISTS external_marks (
     approved_by   uuid REFERENCES users(id) ON DELETE SET NULL,
     approved_at   timestamptz,
     published     boolean NOT NULL DEFAULT false,
+    updated_at    timestamptz NOT NULL DEFAULT now(),
     CHECK (
         (approved = false AND approved_by IS NULL AND approved_at IS NULL) OR
         (approved = true  AND approved_by IS NOT NULL AND approved_at IS NOT NULL)
@@ -329,13 +359,17 @@ CREATE TABLE IF NOT EXISTS external_marks (
 );
 
 -- ─── 1.6 Community ────────────────────────────────────────────────────────────
+-- NOTE: PR #52 (feature/community-redesign) splits this table into clubs/
+-- classroom_discussions/staff_groups -- whoever resolves that eventual merge conflict
+-- drops this table's updated_at line along with the rest of it. Expected, not a bug.
 CREATE TABLE IF NOT EXISTS groups (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
     type        group_type NOT NULL,
     name        text NOT NULL,
     created_by  uuid REFERENCES users(id) ON DELETE SET NULL,
-    section_id  uuid REFERENCES sections(id) ON DELETE SET NULL
+    section_id  uuid REFERENCES sections(id) ON DELETE SET NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_groups_college ON groups (college_id);
 
@@ -346,6 +380,7 @@ CREATE TABLE IF NOT EXISTS group_members (
     joined_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (group_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members (user_id);
 
 CREATE TABLE IF NOT EXISTS group_posts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -365,6 +400,7 @@ CREATE TABLE IF NOT EXISTS materials (
     file_url     text NOT NULL,
     title        text NOT NULL,
     uploaded_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
     CHECK (subject_id IS NOT NULL OR group_id IS NOT NULL)  -- attached to one or both
 );
 
@@ -378,6 +414,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_by             uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     restricted_years       int[],
     restricted_departments uuid[],
+    updated_at             timestamptz NOT NULL DEFAULT now(),
     CHECK (end_time > start_time)
 );
 CREATE INDEX IF NOT EXISTS idx_events_college_time
@@ -390,6 +427,8 @@ CREATE TABLE IF NOT EXISTS event_registrations (
     registered_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (event_id, student_id)
 );
+CREATE INDEX IF NOT EXISTS idx_event_registrations_student
+    ON event_registrations (student_id);
 
 CREATE TABLE IF NOT EXISTS todos (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -398,7 +437,8 @@ CREATE TABLE IF NOT EXISTS todos (
     due_date   timestamptz,
     completed  boolean NOT NULL DEFAULT false,
     priority   int NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 3),
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_todos_student ON todos (student_id, completed);
@@ -407,7 +447,8 @@ CREATE TABLE IF NOT EXISTS custom_calendar_entries (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title      text NOT NULL,
-    entry_date date NOT NULL
+    entry_date date NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_custom_calendar_student
     ON custom_calendar_entries (student_id, entry_date);
@@ -426,7 +467,8 @@ CREATE TABLE IF NOT EXISTS whitelist_requests (
     url           text NOT NULL,
     requested_by  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status        whitelist_request_status NOT NULL DEFAULT 'pending',
-    reviewed_by   uuid REFERENCES users(id) ON DELETE SET NULL
+    reviewed_by   uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- AIS-01: raw per-visit log the browsing summary is generated from — distinct from
@@ -468,6 +510,9 @@ CREATE TABLE IF NOT EXISTS note_links (
     CHECK (from_note_id <> to_note_id)
 );
 
+-- No controller currently transitions ocr_status past 'pending' -- included here anyway
+-- since the enum's processing/completed/failed states document the intended OCR-pipeline
+-- lifecycle (same "documented intent, not yet wired up" pattern as PR #54's enums).
 CREATE TABLE IF NOT EXISTS documents (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -475,7 +520,8 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_type    doc_type NOT NULL,
     annotations jsonb,
     page_count  int,
-    ocr_status  ocr_status NOT NULL DEFAULT 'pending'
+    ocr_status  ocr_status NOT NULL DEFAULT 'pending',
+    updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
 -- SEK-01: a student's multi-file code project. `language` is plain text (validated
@@ -549,6 +595,8 @@ CREATE TABLE IF NOT EXISTS teacher_reports (
     content      text NOT NULL,
     submitted_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_teacher_reports_teacher ON teacher_reports (teacher_id);
+CREATE INDEX IF NOT EXISTS idx_teacher_reports_student ON teacher_reports (student_id);
 
 CREATE TABLE IF NOT EXISTS section_feedback (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -558,6 +606,7 @@ CREATE TABLE IF NOT EXISTS section_feedback (
     comments     text,
     submitted_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_section_feedback_teacher ON section_feedback (teacher_id);
 
 CREATE TABLE IF NOT EXISTS teacher_feedback (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -567,6 +616,7 @@ CREATE TABLE IF NOT EXISTS teacher_feedback (
     comments     text,
     submitted_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_teacher_feedback_teacher ON teacher_feedback (teacher_id);
 
 CREATE TABLE IF NOT EXISTS timetable_change_requests (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -574,8 +624,11 @@ CREATE TABLE IF NOT EXISTS timetable_change_requests (
     description  text NOT NULL,
     status       text NOT NULL DEFAULT 'pending',
     requested_at timestamptz NOT NULL DEFAULT now(),
-    reviewed_by  uuid REFERENCES users(id) ON DELETE SET NULL
+    reviewed_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at   timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_timetable_change_requests_teacher
+    ON timetable_change_requests (teacher_id);
 
 -- ─── 1.13 Fees ───────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS fee_records (
@@ -585,7 +638,8 @@ CREATE TABLE IF NOT EXISTS fee_records (
     due_date     date NOT NULL,
     status       fee_status NOT NULL DEFAULT 'pending',
     payment_link text,
-    paid_at      timestamptz
+    paid_at      timestamptz,
+    updated_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fee_records_student
     ON fee_records (student_id, status);
@@ -621,5 +675,25 @@ CREATE TABLE IF NOT EXISTS suspicious_flags (
 );
 CREATE INDEX IF NOT EXISTS idx_suspicious_flags_student
     ON suspicious_flags (student_id, flagged_at DESC);
+
+-- Attach set_updated_at() to every base table in `public` that has an updated_at column,
+-- whoever added it and whenever. CREATE OR REPLACE TRIGGER (PG14+) keeps this re-runnable
+-- like the rest of this file, and auto-discovery means a schema-touching PR never needs to
+-- edit this block -- it only ever needs to add the column itself.
+DO $$
+DECLARE t text;
+BEGIN
+    FOR t IN
+        SELECT c.table_name FROM information_schema.columns c
+        JOIN information_schema.tables tb
+          ON tb.table_schema = c.table_schema AND tb.table_name = c.table_name
+        WHERE c.table_schema = 'public' AND c.column_name = 'updated_at'
+          AND tb.table_type = 'BASE TABLE'
+    LOOP
+        EXECUTE format(
+            'CREATE OR REPLACE TRIGGER trg_set_updated_at
+             BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION set_updated_at()', t);
+    END LOOP;
+END $$;
 
 COMMIT;

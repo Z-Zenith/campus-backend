@@ -141,8 +141,24 @@ builder.Services.AddSingleton<IContainerCli>(sp =>
 
 // SEK-01: code execution — each Run shells out to `<runtime> run` for a throwaway
 // per-submission sandbox (see ContainerCodeRunner's doc comment for why this replaced
-// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP.
-builder.Services.AddSingleton<ICodeRunner, ContainerCodeRunner>();
+// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP. Registered keyed
+// ("primary") rather than as plain ICodeRunner — CompositeCodeRunner below is what's
+// actually injected as ICodeRunner, with this as its primary.
+builder.Services.AddKeyedSingleton<ICodeRunner, ContainerCodeRunner>("primary");
+
+// B1: Piston-backed remote-execution fallback (see PistonClient's doc comment for why
+// Piston, not Judge0, per the 0.1 spike). Self-hosted, internal-only — no credentials.
+// Also keyed ("fallback"), same reasoning as "primary" above.
+builder.Services.AddHttpClient<IPistonClient, PistonClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Piston:BaseUrl"] ?? "http://piston:2000");
+});
+builder.Services.AddKeyedSingleton<ICodeRunner, RemoteCodeRunner>("fallback");
+
+// CompositeCodeRunner: ContainerCodeRunner primary, RemoteCodeRunner fallback only on an
+// infra-unreachable failure (see CompositeCodeRunner's own doc comment) — this, not
+// either runner directly, is what's actually injected wherever ICodeRunner is asked for.
+builder.Services.AddSingleton<ICodeRunner, CompositeCodeRunner>();
 
 // SEK-01: integrated terminal — persistent per-session sandbox container, reaped on an
 // idle timer (see TerminalSessionService's doc comment for scope). Singleton: the

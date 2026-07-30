@@ -14,6 +14,8 @@ public class FakeAiServicesClient : IAiServicesClient
     public SyllabusExtractionResult SyllabusExtractionResult { get; set; } = new(null, null, null, null, []);
     public bool ThrowInvalidPdf { get; set; }
     public byte[]? LastPdfBytes { get; private set; }
+    public ClassifyDomainResult ClassifyDomainResult { get; set; } = new(0.5, new Dictionary<string, double>());
+    public string? LastClassifiedDomain { get; private set; }
 
     public Task<IReadOnlyList<SimilarityMatchResult>> CheckSimilarityAsync(
         IReadOnlyList<(string Id, string Content)> submissions, double threshold, CancellationToken ct = default)
@@ -38,5 +40,12 @@ public class FakeAiServicesClient : IAiServicesClient
         }
         LastPdfBytes = pdfBytes;
         return Task.FromResult(SyllabusExtractionResult);
+    }
+
+    public Task<ClassifyDomainResult> ClassifyDomainAsync(
+        string domain, string title, string metaDescription, string ogDescription, string bodyText, CancellationToken ct = default)
+    {
+        LastClassifiedDomain = domain;
+        return Task.FromResult(ClassifyDomainResult);
     }
 }

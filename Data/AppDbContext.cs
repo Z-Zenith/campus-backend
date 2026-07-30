@@ -20,6 +20,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<AutogradeSuggestion> AutogradeSuggestions { get; set; }
 
+    public virtual DbSet<BlockedSite> BlockedSites { get; set; }
+
     public virtual DbSet<BrowsingHistory> BrowsingHistories { get; set; }
 
     public virtual DbSet<BrowsingHistorySummary> BrowsingHistorySummaries { get; set; }
@@ -88,6 +90,10 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<SectionFeedback> SectionFeedbacks { get; set; }
 
+    public virtual DbSet<SiteClassificationCache> SiteClassificationCaches { get; set; }
+
+    public virtual DbSet<SiteClassificationFeedback> SiteClassificationFeedbacks { get; set; }
+
     public virtual DbSet<Subject> Subjects { get; set; }
 
     public virtual DbSet<Submission> Submissions { get; set; }
@@ -128,6 +134,7 @@ public partial class AppDbContext : DbContext
             .HasPostgresEnum<NotificationType>()
             .HasPostgresEnum<OcrStatus>()
             .HasPostgresEnum<ScopeKind>()
+            .HasPostgresEnum<SiteClassificationFeedbackType>()
             .HasPostgresEnum<WhitelistRequestStatus>()
             .HasPostgresExtension("pgcrypto");
 
@@ -179,6 +186,18 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
 
             entity.HasOne(d => d.Submission).WithMany(p => p.AutogradeSuggestions).HasConstraintName("autograde_suggestions_submission_id_fkey");
+        });
+
+        modelBuilder.Entity<BlockedSite>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("blocked_sites_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.BlockedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.College).WithMany(p => p.BlockedSites).HasConstraintName("blocked_sites_college_id_fkey");
+
+            entity.HasOne(d => d.BlockedByNavigation).WithMany(p => p.BlockedSiteBlockedByNavigations).HasConstraintName("blocked_sites_blocked_by_fkey");
         });
 
         modelBuilder.Entity<BrowsingHistory>(entity =>
@@ -616,6 +635,29 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.Section).WithMany(p => p.SectionFeedbacks).HasConstraintName("section_feedback_section_id_fkey");
 
             entity.HasOne(d => d.Teacher).WithMany(p => p.SectionFeedbacks).HasConstraintName("section_feedback_teacher_id_fkey");
+        });
+
+        modelBuilder.Entity<SiteClassificationCache>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("site_classification_cache_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.ComputedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.College).WithMany(p => p.SiteClassificationCaches).HasConstraintName("site_classification_cache_college_id_fkey");
+        });
+
+        modelBuilder.Entity<SiteClassificationFeedback>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("site_classification_feedback_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Feedback).HasColumnType("site_classification_feedback_type");
+
+            entity.HasOne(d => d.College).WithMany(p => p.SiteClassificationFeedbacks).HasConstraintName("site_classification_feedback_college_id_fkey");
+
+            entity.HasOne(d => d.Student).WithMany(p => p.SiteClassificationFeedbacks).HasConstraintName("site_classification_feedback_student_id_fkey");
         });
 
         modelBuilder.Entity<Subject>(entity =>

@@ -257,6 +257,168 @@ public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, I
         return Ok(new AddDefaultSitesResponse(added, alreadyWhitelisted));
     }
 
+    // SDA-03 classification policy engine (SDA/SEK plan, Work Item A2). Data flow, cheapest
+    // checks first: (1) exact-host override lists (whitelist_sites always-allow,
+    // blocked_sites always-block — both win over the classifier in either direction and
+    // both short-circuit before it's ever consulted, preserving the existing manual
+    // teacher-approval flow exactly); (2) site_classification_cache, the real shared
+    // source of truth keyed by (college_id, host) — every student at this college hitting
+    // the same host gets the same row, not a per-student recomputation; (3) on a genuine
+    // cache miss, call ai-services for content/domain-reputation, aggregate this college's
+    // historical usage + feedback (SiteReputationAggregator — also college-wide, not
+    // per-student), combine via SiteClassificationPolicy's hybrid score, and cache the
+    // result. The desktop client never computes its own allow/deny decision — this
+    // endpoint is the sole source of truth for "is this URL allowed."
+    [HttpPost("browser/classify")]
+    public async Task<ActionResult<ClassifyUrlResponse>> ClassifyUrl(ClassifyUrlRequest request)
+    {
+        var user = await CurrentUserAsync();
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+        if (!TryNormalizeUrl(request.Url, out var normalizedUrl) || !Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri))
+        {
+            return BadRequest(new { error = "invalid_url", message = "URL must be an absolute http:// or https:// address." });
+        }
+        var host = uri.Host.ToLowerInvariant();
+
+        var whitelistedHosts = await WhitelistedHostsAsync(user.CollegeId);
+        if (whitelistedHosts.Contains(host))
+        {
+            return Ok(new ClassifyUrlResponse(Allowed: true, Score: 1.0, Categories: [], Source: "override_allow"));
+        }
+
+        var blockedHosts = await BlockedHostsAsync(user.CollegeId);
+        if (blockedHosts.Contains(host))
+        {
+            return Ok(new ClassifyUrlResponse(Allowed: false, Score: 0.0, Categories: [], Source: "override_block"));
+        }
+
+        var now = DateTime.UtcNow;
+        var cached = await db.SiteClassificationCaches
+            .FirstOrDefaultAsync(c => c.CollegeId == user.CollegeId && c.Host == host && c.ExpiresAt > now);
+        if (cached is not null)
+        {
+            return Ok(new ClassifyUrlResponse(cached.Allowed, cached.HybridScore, BuildCategoriesDict(cached.MatchedCategory), Source: "cache"));
+        }
+
+        var classification = await aiServices.ClassifyDomainAsync(
+            host, request.Title ?? "", request.MetaDescription ?? "", request.OgDescription ?? "", request.BodyText ?? "");
+        var historicalUsageRatio = await SiteReputationAggregator.HistoricalUsageRatioAsync(db, user.CollegeId, host);
+        var feedbackRatio = await SiteReputationAggregator.FeedbackRatioAsync(db, user.CollegeId, host);
+
+        var decision = SiteClassificationPolicy.ComputeHybridScore(
+            classification.DomainReputationScore, classification.ContentCategories, historicalUsageRatio, feedbackRatio);
+
+        await UpsertCacheAsync(user.CollegeId, host, decision, now);
+
+        return Ok(new ClassifyUrlResponse(decision.Allowed, decision.HybridScore, BuildCategoriesDict(decision.MatchedCategory), Source: "computed"));
+    }
+
+    // SDA-03: a student/teacher reporting a classification as wrong. Individual rows are
+    // kept for audit (see site_classification_feedback's own doc comment), but this
+    // immediately invalidates the corresponding cache row so the report visibly changes
+    // something right away rather than waiting out the cache's expiry — a human-override
+    // safety valve that doesn't respond for up to 24h would look unresponsive/broken.
+    [HttpPost("browser/classify/feedback")]
+    public async Task<IActionResult> SubmitClassificationFeedback(SiteFeedbackRequest request)
+    {
+        var user = await CurrentUserAsync();
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+        if (!TryNormalizeUrl(request.Url, out var normalizedUrl) || !Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri))
+        {
+            return BadRequest(new { error = "invalid_url", message = "URL must be an absolute http:// or https:// address." });
+        }
+        // "should_allow"/"should_block" (the wire contract, matching classify-domain's own
+        // snake_case convention) -> ShouldAllow/ShouldBlock (the enum member names) — a
+        // plain Enum.TryParse(ignoreCase: true) does NOT bridge the underscore, it only
+        // ignores casing, so "should_block" would otherwise never match "ShouldBlock".
+        var normalizedFeedback = request.Feedback?.Replace("_", "", StringComparison.Ordinal) ?? "";
+        if (!Enum.TryParse<SiteClassificationFeedbackType>(normalizedFeedback, ignoreCase: true, out var feedbackType))
+        {
+            return BadRequest(new { error = "invalid_feedback", message = "feedback must be 'should_allow' or 'should_block'." });
+        }
+        var host = uri.Host.ToLowerInvariant();
+
+        db.SiteClassificationFeedbacks.Add(new SiteClassificationFeedback
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = user.CollegeId,
+            Host = host,
+            StudentId = user.Id,
+            Feedback = feedbackType,
+        });
+
+        var existingCache = await db.SiteClassificationCaches
+            .FirstOrDefaultAsync(c => c.CollegeId == user.CollegeId && c.Host == host);
+        if (existingCache is not null)
+        {
+            db.SiteClassificationCaches.Remove(existingCache);
+        }
+
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    private async Task<HashSet<string>> WhitelistedHostsAsync(Guid collegeId)
+    {
+        var urls = await db.WhitelistSites.Where(s => s.CollegeId == collegeId).Select(s => s.Url).ToListAsync();
+        return urls.Select(TryGetHost).Where(h => h is not null).Select(h => h!).ToHashSet();
+    }
+
+    private async Task<HashSet<string>> BlockedHostsAsync(Guid collegeId)
+    {
+        var urls = await db.BlockedSites.Where(s => s.CollegeId == collegeId).Select(s => s.Url).ToListAsync();
+        return urls.Select(TryGetHost).Where(h => h is not null).Select(h => h!).ToHashSet();
+    }
+
+    private async Task UpsertCacheAsync(Guid collegeId, string host, SiteClassificationPolicy.Decision decision, DateTime computedAt)
+    {
+        var existing = await db.SiteClassificationCaches.FirstOrDefaultAsync(c => c.CollegeId == collegeId && c.Host == host);
+        if (existing is null)
+        {
+            db.SiteClassificationCaches.Add(new SiteClassificationCache
+            {
+                Id = Guid.NewGuid(),
+                CollegeId = collegeId,
+                Host = host,
+                HybridScore = decision.HybridScore,
+                Allowed = decision.Allowed,
+                MatchedCategory = decision.MatchedCategory,
+                ComputedAt = computedAt,
+                ExpiresAt = computedAt.AddHours(24),
+            });
+        }
+        else
+        {
+            existing.HybridScore = decision.HybridScore;
+            existing.Allowed = decision.Allowed;
+            existing.MatchedCategory = decision.MatchedCategory;
+            existing.ComputedAt = computedAt;
+            existing.ExpiresAt = computedAt.AddHours(24);
+        }
+
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Two concurrent cache misses for the same (college, host) both computed and
+            // tried to insert — the unique index on (college_id, host) rejected the loser.
+            // Non-fatal: the winner's row is already the correct, usable cached decision;
+            // this request's own in-memory `decision` result is still returned to its
+            // caller either way, so no retry is needed here.
+        }
+    }
+
+    private static Dictionary<string, double> BuildCategoriesDict(string? matchedCategory) =>
+        matchedCategory is null ? [] : new Dictionary<string, double> { [matchedCategory] = 1.0 };
+
     // AIS-01: "a role without that permission cannot see the summary anywhere, including
     // in the student's own profile view" — the permission check applies unconditionally,
     // there's no self-view exception even for the student the summary is about.
@@ -465,6 +627,9 @@ public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, I
         normalized = $"{uri.Scheme}://{uri.Host.ToLowerInvariant()}{port}{path}{uri.Query}";
         return true;
     }
+
+    private static string? TryGetHost(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host.ToLowerInvariant() : null;
 
     private async Task<User?> CurrentUserAsync()
     {

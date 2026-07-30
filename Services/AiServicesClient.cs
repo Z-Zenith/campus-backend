@@ -17,6 +17,11 @@ public record SuspiciousFlagResult(string StudentId, string? ClassSessionId, str
 
 public record BrowsingVisitInput(string Url, DateTime VisitedAt, int? DurationSeconds);
 
+// SDA-03: content/domain-reputation half of the classification policy engine. Stateless
+// scoring only — see classifier.py's doc comment — this client never decides allow/deny,
+// that's BrowsingController/SiteClassificationPolicy's job.
+public record ClassifyDomainResult(double DomainReputationScore, IReadOnlyDictionary<string, double> ContentCategories);
+
 // AIS-06: extracted fields from a syllabus PDF, straight off campus-ai-services'
 // POST /api/v1/syllabus-extraction response. Every field but confidence_notes is nullable
 // because the extractor may not confidently find them; confidence_notes is always an array
@@ -50,6 +55,10 @@ public interface IAiServicesClient
     // /api/v1/syllabus-extraction and returns the extracted fields. Throws
     // SyllabusExtractionInvalidPdfException when the PDF is malformed/undecodable (HTTP 400).
     Task<SyllabusExtractionResult> ExtractSyllabusAsync(byte[] pdfBytes, CancellationToken ct = default);
+
+    // SDA-03: classify-domain — see ClassifyDomainResult's doc comment.
+    Task<ClassifyDomainResult> ClassifyDomainAsync(
+        string domain, string title, string metaDescription, string ogDescription, string bodyText, CancellationToken ct = default);
 }
 
 public class AiServicesClient(HttpClient http) : IAiServicesClient
@@ -151,5 +160,19 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
             ?? throw new InvalidOperationException("AI Services returned an empty syllabus extraction response.");
         return new SyllabusExtractionResult(
             result.CourseCode, result.CourseName, result.InstructorName, result.Credits, result.ConfidenceNotes ?? []);
+    }
+
+    private sealed record ClassifyDomainRequestBody(string Domain, string Title, string MetaDescription, string OgDescription, string BodyText);
+    private sealed record ClassifyDomainResponseBody(double DomainReputationScore, Dictionary<string, double> ContentCategories, bool Cached);
+
+    public async Task<ClassifyDomainResult> ClassifyDomainAsync(
+        string domain, string title, string metaDescription, string ogDescription, string bodyText, CancellationToken ct = default)
+    {
+        var body = new ClassifyDomainRequestBody(domain, title, metaDescription, ogDescription, bodyText);
+        var response = await http.PostAsJsonAsync("/api/v1/classify-domain", body, JsonOptions, ct);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<ClassifyDomainResponseBody>(JsonOptions, ct)
+            ?? throw new InvalidOperationException("AI Services returned an empty classify-domain response.");
+        return new ClassifyDomainResult(result.DomainReputationScore, result.ContentCategories);
     }
 }

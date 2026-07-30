@@ -702,6 +702,184 @@ public class BrowsingControllerTests
         Assert.Equal(NotificationType.WhitelistRequest, routed.Type);
     }
 
+    // SDA-03 classification policy engine (Work Item A2)
+
+    [Fact]
+    public async Task ClassifyUrl_WhitelistedHost_AllowsWithoutCallingAiServices()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        db.WhitelistSites.Add(new WhitelistSite { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Url = "https://allowed.example", ApprovedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var fakeAi = new FakeAiServicesClient();
+        var controller = ControllerAs(db, student, fakeAi);
+        var result = await controller.ClassifyUrl(new ClassifyUrlRequest("https://allowed.example/path", null, null, null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<ClassifyUrlResponse>(ok.Value);
+        Assert.True(dto.Allowed);
+        Assert.Equal("override_allow", dto.Source);
+        Assert.Null(fakeAi.LastClassifiedDomain);
+    }
+
+    [Fact]
+    public async Task ClassifyUrl_BlockedHost_DeniesWithoutCallingAiServices()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        var admin = NewUser(AccountType.AdminTier, student.CollegeId);
+        db.Users.AddRange(student, admin);
+        db.BlockedSites.Add(new BlockedSite { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Url = "https://blocked.example", BlockedAt = DateTime.UtcNow, BlockedBy = admin.Id });
+        await db.SaveChangesAsync();
+
+        var fakeAi = new FakeAiServicesClient();
+        var controller = ControllerAs(db, student, fakeAi);
+        var result = await controller.ClassifyUrl(new ClassifyUrlRequest("https://blocked.example", null, null, null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<ClassifyUrlResponse>(ok.Value);
+        Assert.False(dto.Allowed);
+        Assert.Equal("override_block", dto.Source);
+        Assert.Null(fakeAi.LastClassifiedDomain);
+    }
+
+    // The whitelist override must win even when the classifier would otherwise deny —
+    // both override lists win over the classifier in either direction.
+    [Fact]
+    public async Task ClassifyUrl_OverrideAllow_WinsEvenIfClassifierWouldHaveDenied()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        db.WhitelistSites.Add(new WhitelistSite { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Url = "https://allowed.example", ApprovedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var fakeAi = new FakeAiServicesClient
+        {
+            ClassifyDomainResult = new ClassifyDomainResult(0.0, new Dictionary<string, double> { ["blocked.gambling"] = 1.0 }),
+        };
+        var controller = ControllerAs(db, student, fakeAi);
+        var result = await controller.ClassifyUrl(new ClassifyUrlRequest("https://allowed.example", null, null, null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        Assert.True(((ClassifyUrlResponse)ok.Value!).Allowed);
+    }
+
+    [Fact]
+    public async Task ClassifyUrl_CacheMiss_CallsAiServicesAndPersistsTheResult()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var fakeAi = new FakeAiServicesClient
+        {
+            ClassifyDomainResult = new ClassifyDomainResult(1.0, new Dictionary<string, double> { ["technology.programming"] = 0.9 }),
+        };
+        var controller = ControllerAs(db, student, fakeAi);
+        var result = await controller.ClassifyUrl(new ClassifyUrlRequest("https://new-site.example", "A programming site", null, null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<ClassifyUrlResponse>(ok.Value);
+        Assert.True(dto.Allowed);
+        Assert.Equal("computed", dto.Source);
+        Assert.Equal("new-site.example", fakeAi.LastClassifiedDomain);
+
+        var cached = Assert.Single(await db.SiteClassificationCaches.Where(c => c.CollegeId == student.CollegeId).ToListAsync());
+        Assert.Equal("new-site.example", cached.Host);
+        Assert.True(cached.Allowed);
+    }
+
+    // The whole point of a (college_id, host)-keyed cache: a second student at the same
+    // college hitting the same host must get the identical decision from the cache, with
+    // no second call to ai-services.
+    [Fact]
+    public async Task ClassifyUrl_SecondRequestForSameCollegeAndHost_IsServedFromCache_NotRecomputed()
+    {
+        await using var db = NewDb();
+        var studentA = NewUser(AccountType.Student);
+        var studentB = NewUser(AccountType.Student, studentA.CollegeId);
+        db.Users.AddRange(studentA, studentB);
+        await db.SaveChangesAsync();
+
+        var fakeAi = new FakeAiServicesClient
+        {
+            ClassifyDomainResult = new ClassifyDomainResult(1.0, new Dictionary<string, double> { ["technology.programming"] = 0.9 }),
+        };
+
+        var first = await ControllerAs(db, studentA, fakeAi).ClassifyUrl(new ClassifyUrlRequest("https://new-site.example", null, null, null, null));
+        fakeAi.ClassifyDomainResult = new ClassifyDomainResult(0.0, new Dictionary<string, double> { ["blocked.gambling"] = 1.0 }); // would deny if called again
+        var second = await ControllerAs(db, studentB, fakeAi).ClassifyUrl(new ClassifyUrlRequest("https://new-site.example", null, null, null, null));
+
+        var firstDto = (ClassifyUrlResponse)((OkObjectResult)first.Result!).Value!;
+        var secondDto = (ClassifyUrlResponse)((OkObjectResult)second.Result!).Value!;
+        Assert.True(firstDto.Allowed);
+        Assert.True(secondDto.Allowed); // still allowed — served from cache, not recomputed
+        Assert.Equal("cache", secondDto.Source);
+        Assert.Single(await db.SiteClassificationCaches.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ClassifyUrl_RejectsAnInvalidUrl()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.ClassifyUrl(new ClassifyUrlRequest("not-a-url", null, null, null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    // Submitting feedback must invalidate the cache row immediately, not wait out its
+    // 24h expiry — the human-override safety valve must visibly do something right away.
+    [Fact]
+    public async Task SubmitClassificationFeedback_InvalidatesTheCorrespondingCacheRow()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        db.SiteClassificationCaches.Add(new SiteClassificationCache
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = student.CollegeId,
+            Host = "flagged.example",
+            HybridScore = 0.9,
+            Allowed = true,
+            ComputedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddHours(24),
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.SubmitClassificationFeedback(new SiteFeedbackRequest("https://flagged.example", "should_block"));
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Empty(await db.SiteClassificationCaches.Where(c => c.CollegeId == student.CollegeId).ToListAsync());
+        var feedback = Assert.Single(await db.SiteClassificationFeedbacks.ToListAsync());
+        Assert.Equal(SiteClassificationFeedbackType.ShouldBlock, feedback.Feedback);
+        Assert.Equal(student.Id, feedback.StudentId);
+    }
+
+    [Fact]
+    public async Task SubmitClassificationFeedback_RejectsAnUnknownFeedbackValue()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.SubmitClassificationFeedback(new SiteFeedbackRequest("https://example.com", "not_a_real_value"));
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
     [Fact]
     public async Task ApproveWhitelistRequest_DoesNotNotify_WhenAlreadyReviewed()
     {

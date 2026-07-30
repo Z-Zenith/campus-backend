@@ -51,6 +51,14 @@ DO $$ BEGIN
     CREATE TYPE ocr_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'not_applicable');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- SDA-03 classification policy engine (SDA/SEK plan, Work Item A2). A student's report
+-- that a site is wrongly allowed/blocked; individual rows are kept for audit, but the
+-- *signal* the hybrid score actually uses is the aggregate across the college — see
+-- SiteReputationAggregator.
+DO $$ BEGIN
+    CREATE TYPE site_classification_feedback_type AS ENUM ('should_allow', 'should_block');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ─── 1.1 Tenancy & Identity ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS colleges (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -428,6 +436,55 @@ CREATE TABLE IF NOT EXISTS whitelist_requests (
     status        whitelist_request_status NOT NULL DEFAULT 'pending',
     reviewed_by   uuid REFERENCES users(id) ON DELETE SET NULL
 );
+
+-- SDA-03 classification policy engine (SDA/SEK plan, Work Item A2). The always-block
+-- counterpart to whitelist_sites — same shape, same college-scoping, checked as an
+-- override alongside it (both win over the classifier in either direction) before the
+-- classifier cache below is ever consulted.
+CREATE TABLE IF NOT EXISTS blocked_sites (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
+    url         text NOT NULL,
+    blocked_at  timestamptz NOT NULL DEFAULT now(),
+    blocked_by  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE (college_id, url)
+);
+
+-- SDA-03 classification policy engine. The real shared source of truth for "what did we
+-- decide about this domain" — keyed by (college_id, host), NOT by student or device, so
+-- every student at the same college hitting the same host reads the same row. Computed
+-- once per (college, host) on a cache miss (content classification from campus-ai-services
+-- + college-wide aggregated historical usage + college-wide aggregated feedback, combined
+-- via a weighted hybrid score) and reused until expires_at — see BrowsingController's
+-- POST /browser/classify.
+CREATE TABLE IF NOT EXISTS site_classification_cache (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    college_id        uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
+    host              text NOT NULL,
+    hybrid_score      double precision NOT NULL,
+    allowed           boolean NOT NULL,
+    matched_category  text,
+    computed_at       timestamptz NOT NULL DEFAULT now(),
+    expires_at        timestamptz NOT NULL,
+    UNIQUE (college_id, host)
+);
+
+-- SDA-03 classification policy engine. A student's "this is wrongly blocked/allowed"
+-- report — individual rows kept for audit/accountability, but the hybrid score only ever
+-- reads the college-wide aggregate (e.g. % should_allow vs should_block for a host), never
+-- a single student's report in isolation. Submitting new feedback invalidates the
+-- corresponding site_classification_cache row immediately (see BrowsingController's
+-- POST /browser/classify/feedback) rather than waiting out expires_at.
+CREATE TABLE IF NOT EXISTS site_classification_feedback (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
+    host        text NOT NULL,
+    student_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    feedback    site_classification_feedback_type NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_site_classification_feedback_college_host
+    ON site_classification_feedback (college_id, host);
 
 -- AIS-01: raw per-visit log the browsing summary is generated from — distinct from
 -- browsing_history_summaries below, which stores the generated summary text itself.

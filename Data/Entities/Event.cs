@@ -38,6 +38,18 @@ public partial class Event
     [Column("event_type")]
     public EventType EventType { get; set; }
 
+    [Column("status")]
+    public EventStatus Status { get; set; }
+
+    [Column("approved_by")]
+    public Guid? ApprovedBy { get; set; }
+
+    [Column("approved_at")]
+    public DateTime? ApprovedAt { get; set; }
+
+    [Column("recurrence_rule")]
+    public string? RecurrenceRule { get; set; }
+
     [ForeignKey("CollegeId")]
     [InverseProperty("Events")]
     public virtual College College { get; set; } = null!;
@@ -45,6 +57,10 @@ public partial class Event
     [ForeignKey("CreatedBy")]
     [InverseProperty("Events")]
     public virtual User CreatedByNavigation { get; set; } = null!;
+
+    [ForeignKey("ApprovedBy")]
+    [InverseProperty("EventsApproved")]
+    public virtual User? ApprovedByNavigation { get; set; }
 
     [InverseProperty("Event")]
     public virtual ICollection<EventRegistration> EventRegistrations { get; set; } = new List<EventRegistration>();

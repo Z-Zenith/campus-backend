@@ -48,7 +48,7 @@ public class ExamSchedulesControllerTests
     };
 
     private static ExamSchedulesController ControllerAs(AppDbContext db, User user, IPermissionService? permissions = null) => new(
-        db, permissions ?? new AllowingPermissionService(), new CollegeScopeService(db))
+        db, permissions ?? new AllowingPermissionService(), new CollegeScopeService(db), new HolidayService(db))
     {
         ControllerContext = new ControllerContext
         {
@@ -181,6 +181,43 @@ public class ExamSchedulesControllerTests
         Assert.Equal(ExamType.External, dto.ExamType);
         Assert.Equal("CS101", dto.SubjectCode);
         Assert.Equal("Hall A", dto.Room);
+    }
+
+    // Events redesign: a Holiday event now actually blocks scheduling, not just an
+    // informational calendar entry.
+    [Fact]
+    public async Task Create_RejectsExamDateOnACollegeHoliday()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 1, Name = "A" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var holidayDate = new DateOnly(2026, 12, 10);
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = caller.CollegeId,
+            Title = "Holiday",
+            StartTime = holidayDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            EndTime = holidayDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
+            CreatedBy = caller.Id,
+            EventType = EventType.Holiday,
+            Status = EventStatus.Approved,
+            ApprovedBy = caller.Id,
+            ApprovedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.Create(section.Id, new CreateExamScheduleRequest(subject.Id, ExamType.External, holidayDate, new TimeOnly(10, 0), new TimeOnly(13, 0), "Hall A"));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Empty(await db.ExamSchedules.ToListAsync());
     }
 
     [Fact]

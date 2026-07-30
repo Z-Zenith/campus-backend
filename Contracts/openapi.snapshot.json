@@ -980,6 +980,104 @@
         }
       }
     },
+    "/api/v1/events/pending": {
+      "get": {
+        "tags": [
+          "Calendar"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminEventDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminEventDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminEventDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/approve": {
+      "post": {
+        "tags": [
+          "Calendar"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveEventRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveEventRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEventDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEventDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEventDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/created": {
       "get": {
         "tags": [
@@ -7082,7 +7180,11 @@
           "endTime",
           "restrictedYears",
           "restrictedDepartments",
-          "eventType"
+          "eventType",
+          "status",
+          "approvedBy",
+          "approvedAt",
+          "recurrenceRule"
         ],
         "type": "object",
         "properties": {
@@ -7127,6 +7229,40 @@
           },
           "eventType": {
             "$ref": "#/components/schemas/EventType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EventStatus"
+          },
+          "approvedBy": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "approvedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "recurrenceRule": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ApproveEventRequest": {
+        "required": [
+          "approve"
+        ],
+        "type": "object",
+        "properties": {
+          "approve": {
+            "type": "boolean"
           }
         }
       },
@@ -8248,6 +8384,12 @@
                 "$ref": "#/components/schemas/EventType"
               }
             ]
+          },
+          "recurrenceRule": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -9072,6 +9214,14 @@
             "$ref": "#/components/schemas/EventType"
           }
         }
+      },
+      "EventStatus": {
+        "enum": [
+          "Pending",
+          "Approved",
+          "Denied"
+        ],
+        "type": "string"
       },
       "EventType": {
         "enum": [
@@ -11870,6 +12020,12 @@
               {
                 "$ref": "#/components/schemas/EventType"
               }
+            ]
+          },
+          "recurrenceRule": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }

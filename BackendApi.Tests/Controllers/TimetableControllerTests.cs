@@ -93,7 +93,7 @@ public class TimetableControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new TimetableController(db, permissions ?? new FakePermissionService(), new FakeNotificationRouter(), new CollegeScopeService(db), logger ?? NullLogger<TimetableController>.Instance)
+        return new TimetableController(db, permissions ?? new FakePermissionService(), new FakeNotificationRouter(), new CollegeScopeService(db), new HolidayService(db), logger ?? NullLogger<TimetableController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -383,6 +383,66 @@ public class TimetableControllerTests
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var response = Assert.IsType<MarkAttendanceResponse>(ok.Value);
         Assert.Equal(2, response.Records.Count);
+    }
+
+    // Events redesign: a Holiday event now actually blocks scheduling instead of being
+    // purely informational.
+    [Fact]
+    public async Task MarkAttendance_RejectsOnACollegeHoliday()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var fixture = await SeedSectionAsync(db, teacher, studentCount: 1);
+        var holidayDate = new DateOnly(2026, 8, 15);
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = teacher.CollegeId,
+            Title = "Independence Day",
+            StartTime = holidayDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            EndTime = holidayDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
+            CreatedBy = teacher.Id,
+            EventType = EventType.Holiday,
+            Status = EventStatus.Approved,
+            ApprovedBy = teacher.Id,
+            ApprovedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var entries = new List<AttendanceEntryRequest> { new(fixture.Students[0].Id, "Present") };
+        var result = await controller.MarkAttendance(new MarkAttendanceRequest(fixture.Slot.Id, holidayDate, entries));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Empty(await db.ClassSessions.ToListAsync());
+    }
+
+    // A Pending (not-yet-approved) holiday proposal must not block anything.
+    [Fact]
+    public async Task MarkAttendance_AllowsMarkingOnAPendingHolidayProposal()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var fixture = await SeedSectionAsync(db, teacher, studentCount: 1);
+        var proposedDate = new DateOnly(2026, 8, 15);
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = teacher.CollegeId,
+            Title = "Proposed Holiday",
+            StartTime = proposedDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            EndTime = proposedDate.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
+            CreatedBy = teacher.Id,
+            EventType = EventType.Holiday,
+            Status = EventStatus.Pending,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var entries = new List<AttendanceEntryRequest> { new(fixture.Students[0].Id, "Present") };
+        var result = await controller.MarkAttendance(new MarkAttendanceRequest(fixture.Slot.Id, proposedDate, entries));
+
+        Assert.IsType<OkObjectResult>(result.Result);
     }
 
     // #152 — when SessionDate is omitted, the session date must be derived from the
@@ -717,7 +777,7 @@ public class TimetableControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, caller.Id.ToString())], "TestAuth"));
-        return new TimetableController(db, new FakeGlobalTimetablePermissionService(), new FakeNotificationRouter(), new CollegeScopeService(db), NullLogger<TimetableController>.Instance)
+        return new TimetableController(db, new FakeGlobalTimetablePermissionService(), new FakeNotificationRouter(), new CollegeScopeService(db), new HolidayService(db), NullLogger<TimetableController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = principal } },
         };
@@ -791,7 +851,7 @@ public class TimetableControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new TimetableController(db, new FakePermissionService(), notifications, new CollegeScopeService(db), NullLogger<TimetableController>.Instance)
+        return new TimetableController(db, new FakePermissionService(), notifications, new CollegeScopeService(db), new HolidayService(db), NullLogger<TimetableController>.Instance)
         {
             ControllerContext = new ControllerContext
             {

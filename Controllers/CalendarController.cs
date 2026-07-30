@@ -36,6 +36,18 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         {
             return BadRequest(new { error = "invalid_time_range", message = "EndTime must be after StartTime." });
         }
+        if (request.RecurrenceRule is not null && !Services.RecurrenceRule.IsValid(request.RecurrenceRule))
+        {
+            return BadRequest(new { error = "invalid_recurrence_rule", message = "RecurrenceRule is not a valid RRULE-lite string." });
+        }
+
+        // Events redesign: create_event is held both by the pre-existing trusted tier
+        // (lecturer/hod/admin - Teacher/AdminTier accounts) and by the new event_organizer
+        // role (bindable to a specific student). The permission check alone can't
+        // distinguish which granted it, so gate auto-approval on account type instead - a
+        // Student's event needs sign-off before it's visible to anyone else; a Teacher's or
+        // Admin's is approved immediately, same as every existing caller's behavior today.
+        var requiresApproval = creator.AccountType == AccountType.Student;
 
         var newEvent = new Event
         {
@@ -48,11 +60,85 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
             RestrictedYears = request.RestrictedYears,
             RestrictedDepartments = request.RestrictedDepartments,
             EventType = request.EventType ?? EventType.Academic,
+            Status = requiresApproval ? EventStatus.Pending : EventStatus.Approved,
+            ApprovedBy = requiresApproval ? null : userId,
+            ApprovedAt = requiresApproval ? null : DateTime.UtcNow,
+            RecurrenceRule = request.RecurrenceRule,
         };
         db.Events.Add(newEvent);
         await db.SaveChangesAsync();
 
         return Ok(new EventDto(newEvent.Id, newEvent.Title, newEvent.StartTime, newEvent.EndTime, false, newEvent.EventType));
+    }
+
+    // Events redesign: approval queue for events proposed by the event_organizer role.
+    // Restricted to the pre-existing trusted tier (not Student) so an organizer can't
+    // approve their own or another organizer's pending event.
+    [HttpGet("events/pending")]
+    public async Task<ActionResult<List<AdminEventDto>>> ListPendingEvents()
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_event"))
+        {
+            return Forbid();
+        }
+
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (caller.AccountType == AccountType.Student)
+        {
+            return Forbid();
+        }
+
+        var events = await db.Events
+            .Where(e => e.CollegeId == caller.CollegeId && e.Status == EventStatus.Pending)
+            .OrderBy(e => e.StartTime)
+            .ToListAsync();
+        return Ok(events.Select(ToAdminDto).ToList());
+    }
+
+    [HttpPost("events/{id}/approve")]
+    public async Task<ActionResult<AdminEventDto>> ApproveEvent(Guid id, ApproveEventRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_event"))
+        {
+            return Forbid();
+        }
+
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+        if (caller.AccountType == AccountType.Student)
+        {
+            return Forbid();
+        }
+
+        var existingEvent = await db.Events.FirstOrDefaultAsync(e => e.Id == id);
+        if (existingEvent is null)
+        {
+            return NotFound();
+        }
+        if (existingEvent.CollegeId != caller.CollegeId)
+        {
+            return Forbid();
+        }
+        if (existingEvent.Status != EventStatus.Pending)
+        {
+            return Conflict(new { error = "not_pending", message = "This event has already been approved or denied." });
+        }
+
+        existingEvent.Status = request.Approve ? EventStatus.Approved : EventStatus.Denied;
+        existingEvent.ApprovedBy = userId;
+        existingEvent.ApprovedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        return Ok(ToAdminDto(existingEvent));
     }
 
     // Phase 5 - admin-facing event management. Distinct route from GET /events below
@@ -111,6 +197,10 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         {
             return BadRequest(new { error = "invalid_time_range", message = "EndTime must be after StartTime." });
         }
+        if (request.RecurrenceRule is not null && !Services.RecurrenceRule.IsValid(request.RecurrenceRule))
+        {
+            return BadRequest(new { error = "invalid_recurrence_rule", message = "RecurrenceRule is not a valid RRULE-lite string." });
+        }
 
         existingEvent.Title = request.Title;
         existingEvent.StartTime = request.StartTime;
@@ -120,6 +210,10 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         if (request.EventType is { } eventType)
         {
             existingEvent.EventType = eventType;
+        }
+        if (request.RecurrenceRule is not null)
+        {
+            existingEvent.RecurrenceRule = request.RecurrenceRule;
         }
         await db.SaveChangesAsync();
 
@@ -393,7 +487,8 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
     }
 
     private static AdminEventDto ToAdminDto(Event e) => new(
-        e.Id, e.Title, e.StartTime, e.EndTime, e.RestrictedYears, e.RestrictedDepartments, e.EventType);
+        e.Id, e.Title, e.StartTime, e.EndTime, e.RestrictedYears, e.RestrictedDepartments,
+        e.EventType, e.Status, e.ApprovedBy, e.ApprovedAt, e.RecurrenceRule);
 
     private static TodoDto ToTodoDto(Todo t) => new(t.Id, t.Title, t.DueDate, t.Completed);
 
@@ -427,8 +522,11 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         }).ToList();
     }
 
+    // Events redesign: a Pending event is a proposal awaiting sign-off - it must not appear
+    // on any student-facing surface (list, calendar, registration) until approved.
     private IQueryable<Event> EligibleEventsQuery(Guid collegeId, Section section) =>
         db.Events.Where(e => e.CollegeId == collegeId &&
+            e.Status == EventStatus.Approved &&
             (e.RestrictedYears == null || e.RestrictedYears.Contains(section.Year)) &&
             (e.RestrictedDepartments == null || e.RestrictedDepartments.Contains(section.DepartmentId)));
 

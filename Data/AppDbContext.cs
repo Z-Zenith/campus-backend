@@ -146,6 +146,7 @@ public partial class AppDbContext : DbContext
             .HasPostgresEnum<AttendanceStatus>()
             .HasPostgresEnum<DocType>()
             .HasPostgresEnum<EventType>()
+            .HasPostgresEnum<EventStatus>()
             .HasPostgresEnum<ExamType>()
             .HasPostgresEnum<FeeStatus>()
             .HasPostgresEnum<NotificationType>()
@@ -339,12 +340,17 @@ public partial class AppDbContext : DbContext
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.EventType).HasDefaultValue(EventType.Academic);
+            entity.Property(e => e.Status).HasDefaultValue(EventStatus.Approved);
 
             entity.HasOne(d => d.College).WithMany(p => p.Events).HasConstraintName("events_college_id_fkey");
 
             entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.Events)
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("events_created_by_fkey");
+
+            entity.HasOne(d => d.ApprovedByNavigation).WithMany(p => p.EventsApproved)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("events_approved_by_fkey");
         });
 
         modelBuilder.Entity<ExamSchedule>(entity =>

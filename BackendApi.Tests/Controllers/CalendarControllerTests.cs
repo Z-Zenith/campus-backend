@@ -351,4 +351,133 @@ public class CalendarControllerTests
         Assert.IsType<NoContentResult>(deleted);
         Assert.Empty(await db.CustomCalendarEntries.ToListAsync());
     }
+
+    // Phase 5 - admin-facing event management. No test in this file needs
+    // department-scoped denial (see AllowingPermissionService's comment above), so a plain
+    // denying stub is enough for the one Forbid-on-missing-permission test below.
+    private class DenyingPermissionService : IPermissionService
+    {
+        public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
+        public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+    }
+
+    private static CalendarController ControllerAs(AppDbContext db, User user, IPermissionService permissions) => new(db, permissions)
+    {
+        ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth")),
+            },
+        },
+    };
+
+    [Fact]
+    public async Task ListCreatedEvents_ForbidsCallerWithoutCreateEventPermission()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        db.Users.Add(caller);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller, new DenyingPermissionService());
+        var result = await controller.ListCreatedEvents();
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListCreatedEvents_ReturnsOnlyCallersCollegeEvents()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var otherCollegeCreator = NewUser(AccountType.AdminTier);
+        db.Users.AddRange(caller, otherCollegeCreator);
+        db.Events.Add(new Event { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Title = "Own", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = caller.Id });
+        db.Events.Add(new Event { Id = Guid.NewGuid(), CollegeId = otherCollegeCreator.CollegeId, Title = "Other", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = otherCollegeCreator.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.ListCreatedEvents();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var events = Assert.IsType<List<AdminEventDto>>(ok.Value);
+        var dto = Assert.Single(events);
+        Assert.Equal("Own", dto.Title);
+    }
+
+    [Fact]
+    public async Task UpdateEvent_ForbidsCrossCollegeEvent()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var otherCollegeCreator = NewUser(AccountType.AdminTier);
+        db.Users.AddRange(caller, otherCollegeCreator);
+        var otherEvent = new Event { Id = Guid.NewGuid(), CollegeId = otherCollegeCreator.CollegeId, Title = "Other", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = otherCollegeCreator.Id };
+        db.Events.Add(otherEvent);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var start = DateTime.UtcNow;
+        var result = await controller.UpdateEvent(otherEvent.Id, new UpdateEventRequest("Renamed", start, start.AddHours(1), null, null));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task UpdateEvent_RejectsEndTimeAtOrBeforeStartTime()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        db.Users.Add(caller);
+        var existing = new Event { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Title = "Orientation", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = caller.Id };
+        db.Events.Add(existing);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var start = DateTime.UtcNow;
+        var result = await controller.UpdateEvent(existing.Id, new UpdateEventRequest("Orientation", start, start, null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task UpdateEvent_UpdatesFieldsAndPreservesEventTypeWhenOmitted()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        db.Users.Add(caller);
+        var existing = new Event { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Title = "Orientation", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = caller.Id, EventType = EventType.Holiday };
+        db.Events.Add(existing);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var start = DateTime.UtcNow.AddDays(1);
+        var result = await controller.UpdateEvent(existing.Id, new UpdateEventRequest("Renamed", start, start.AddHours(2), null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<AdminEventDto>(ok.Value);
+        Assert.Equal("Renamed", dto.Title);
+        Assert.Equal(EventType.Holiday, dto.EventType);
+    }
+
+    [Fact]
+    public async Task DeleteEvent_RemovesEventAndCascadesRegistrations()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var student = NewUser(AccountType.Student);
+        db.Users.AddRange(caller, student);
+        var existing = new Event { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Title = "Orientation", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = caller.Id };
+        db.Events.Add(existing);
+        db.EventRegistrations.Add(new EventRegistration { Id = Guid.NewGuid(), EventId = existing.Id, StudentId = student.Id });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.DeleteEvent(existing.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Empty(await db.Events.ToListAsync());
+    }
 }

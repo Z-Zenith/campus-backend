@@ -1,27 +1,72 @@
-using BackendApi.Data.Entities;
-
 namespace BackendApi.Contracts;
 
-public record CreateGroupRequest(string Name, GroupType Type, Guid? SectionId);
+// Clubs: opt-in student orgs, led by a faculty lead (teacher) + a student incharge
+// (officer), alongside regular members. See db/init/01_schema.sql's comment on `clubs` for
+// why leadership is a direct FK pair rather than routed through RoleBinding.
+public record CreateClubRequest(string Name, string? Description, Guid? FacultyLeadUserId, Guid? StudentInchargeUserId);
 
-public record GroupDto(Guid Id, string Name, string Type, Guid? SectionId);
+public record UpdateClubRequest(string Name, string? Description, Guid? FacultyLeadUserId, Guid? StudentInchargeUserId);
 
-public record MyGroupsResponse(List<GroupDto> Groups);
+// HomeSiteHtml is club-authored HTML/CSS/JS - callers MUST render it inside a sandboxed
+// iframe (no allow-same-origin, strict CSP) and never inline it into the app's own DOM.
+public record ClubDto(
+    Guid Id,
+    string Name,
+    string? Description,
+    Guid? FacultyLeadUserId,
+    string? FacultyLeadFullName,
+    Guid? StudentInchargeUserId,
+    string? StudentInchargeFullName,
+    string? HomeSiteHtml,
+    int MemberCount);
 
-public record CreatePostRequest(string Content);
+public record UpdateClubHomeSiteRequest(string? HomeSiteHtml);
 
-public record GroupPostDto(Guid Id, Guid GroupId, Guid AuthorId, string Content, DateTime CreatedAt);
+public record ClubMemberDto(Guid Id, Guid UserId, string UserFullName, DateTime JoinedAt);
 
-public record CreateMaterialRequest(string Title, string FileUrl, Guid? SubjectId, Guid? GroupId);
+public record AddClubMemberRequest(Guid UserId);
 
-public record MaterialDto(Guid Id, string Title, string FileUrl, Guid? SubjectId, Guid? GroupId, Guid UploadedBy, DateTime UploadedAt);
+public record CreateClubPostRequest(string Content);
 
-// API-02
-public record ProvisionClassGroupsResponse(int GroupsCreated, int MembershipsAdded);
+public record ClubPostDto(Guid Id, Guid ClubId, Guid AuthorId, string Content, DateTime CreatedAt);
 
-// Phase 6 - group membership management. Genuinely unscoped before this: AWA-06/AWA-12
-// covered create + read-only list, but nothing let a caller see, add to, or remove from a
-// group's membership after creation.
-public record GroupMemberDto(Guid Id, Guid UserId, string UserFullName, DateTime JoinedAt);
+// Classroom discussions: one per (Section, Subject) - auto-provisioned, no direct-create
+// endpoint (mirrors the old Class group's "not through this endpoint" precedent).
+public record ClassroomDiscussionDto(Guid Id, Guid SectionId, string SectionName, Guid SubjectId, string SubjectCode, string SubjectName);
 
-public record AddGroupMemberRequest(Guid UserId);
+public record ProvisionClassroomDiscussionsResponse(int DiscussionsCreated);
+
+public record CreateClassroomDiscussionPostRequest(string Content);
+
+public record ClassroomDiscussionPostDto(Guid Id, Guid ClassroomDiscussionId, Guid AuthorId, string Content, DateTime CreatedAt);
+
+// Staff groups: teacher-only spaces - all that's left of the old flat "groups" concept.
+public record CreateStaffGroupRequest(string Name);
+
+public record StaffGroupDto(Guid Id, string Name);
+
+public record MyStaffGroupsResponse(List<StaffGroupDto> StaffGroups);
+
+public record StaffGroupMemberDto(Guid Id, Guid UserId, string UserFullName, DateTime JoinedAt);
+
+public record AddStaffGroupMemberRequest(Guid UserId);
+
+public record CreateStaffGroupPostRequest(string Content);
+
+public record StaffGroupPostDto(Guid Id, Guid StaffGroupId, Guid AuthorId, string Content, DateTime CreatedAt);
+
+// Materials attach to a subject and/or exactly one community space (club / classroom
+// discussion / staff group).
+public record CreateMaterialRequest(
+    string Title, string FileUrl, Guid? SubjectId, Guid? ClubId, Guid? ClassroomDiscussionId, Guid? StaffGroupId);
+
+public record MaterialDto(
+    Guid Id,
+    string Title,
+    string FileUrl,
+    Guid? SubjectId,
+    Guid? ClubId,
+    Guid? ClassroomDiscussionId,
+    Guid? StaffGroupId,
+    Guid UploadedBy,
+    DateTime UploadedAt);

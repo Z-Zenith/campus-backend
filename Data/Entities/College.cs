@@ -31,7 +31,10 @@ public partial class College
     public virtual ICollection<Event> Events { get; set; } = new List<Event>();
 
     [InverseProperty("College")]
-    public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
+    public virtual ICollection<Club> Clubs { get; set; } = new List<Club>();
+
+    [InverseProperty("College")]
+    public virtual ICollection<StaffGroup> StaffGroups { get; set; } = new List<StaffGroup>();
 
     [InverseProperty("College")]
     public virtual ICollection<User> Users { get; set; } = new List<User>();

@@ -31,7 +31,7 @@ public partial class Section
     public virtual ICollection<ExamSchedule> ExamSchedules { get; set; } = new List<ExamSchedule>();
 
     [InverseProperty("Section")]
-    public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
+    public virtual ICollection<ClassroomDiscussion> ClassroomDiscussions { get; set; } = new List<ClassroomDiscussion>();
 
     [InverseProperty("Section")]
     public virtual ICollection<RoleBinding> RoleBindings { get; set; } = new List<RoleBinding>();

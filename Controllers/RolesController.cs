@@ -89,16 +89,20 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
                 return Forbid();
             }
 
-            // class_teacher: at most 2 active bindings per section (checked at this
-            // granularity - RoleCode/ScopeType, not just SectionId - so a future
-            // section-scoped role with a different cap doesn't inherit this one).
-            if (request.RoleCode == "class_teacher")
+            // class_teacher / class_representative: at most 2 active bindings per section
+            // (checked at this granularity - RoleCode/ScopeType, not just SectionId - so a
+            // future section-scoped role with a different cap doesn't inherit this one).
+            if (request.RoleCode is "class_teacher" or "class_representative")
             {
-                var existingClassTeachers = await db.RoleBindings
-                    .CountAsync(b => b.SectionId == sectionId && b.RoleCode == "class_teacher");
-                if (existingClassTeachers >= 2)
+                var existingHolders = await db.RoleBindings
+                    .CountAsync(b => b.SectionId == sectionId && b.RoleCode == request.RoleCode);
+                if (existingHolders >= 2)
                 {
-                    return Conflict(new { error = "class_teacher_limit_reached", message = "This section already has 2 class teachers assigned." });
+                    return Conflict(new
+                    {
+                        error = $"{request.RoleCode}_limit_reached",
+                        message = $"This section already has 2 {(request.RoleCode == "class_teacher" ? "class teachers" : "class representatives")} assigned.",
+                    });
                 }
             }
         }

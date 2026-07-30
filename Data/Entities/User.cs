@@ -98,13 +98,31 @@ public partial class User
     public virtual ICollection<FeeRecord> FeeRecords { get; set; } = new List<FeeRecord>();
 
     [InverseProperty("User")]
-    public virtual ICollection<GroupMember> GroupMembers { get; set; } = new List<GroupMember>();
+    public virtual ICollection<ClubMember> ClubMemberships { get; set; } = new List<ClubMember>();
 
     [InverseProperty("Author")]
-    public virtual ICollection<GroupPost> GroupPosts { get; set; } = new List<GroupPost>();
+    public virtual ICollection<ClubPost> ClubPosts { get; set; } = new List<ClubPost>();
 
     [InverseProperty("CreatedByNavigation")]
-    public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
+    public virtual ICollection<Club> ClubsCreated { get; set; } = new List<Club>();
+
+    [InverseProperty("FacultyLead")]
+    public virtual ICollection<Club> ClubsAsFacultyLead { get; set; } = new List<Club>();
+
+    [InverseProperty("StudentIncharge")]
+    public virtual ICollection<Club> ClubsAsStudentIncharge { get; set; } = new List<Club>();
+
+    [InverseProperty("Author")]
+    public virtual ICollection<ClassroomDiscussionPost> ClassroomDiscussionPosts { get; set; } = new List<ClassroomDiscussionPost>();
+
+    [InverseProperty("User")]
+    public virtual ICollection<StaffGroupMember> StaffGroupMemberships { get; set; } = new List<StaffGroupMember>();
+
+    [InverseProperty("Author")]
+    public virtual ICollection<StaffGroupPost> StaffGroupPosts { get; set; } = new List<StaffGroupPost>();
+
+    [InverseProperty("CreatedByNavigation")]
+    public virtual ICollection<StaffGroup> StaffGroupsCreated { get; set; } = new List<StaffGroup>();
 
     [InverseProperty("PublishedByNavigation")]
     public virtual ICollection<InternalMark> InternalMarkPublishedByNavigations { get; set; } = new List<InternalMark>();

@@ -11,15 +11,14 @@ using Microsoft.Extensions.Configuration;
 
 namespace BackendApi.Tests.Controllers;
 
+// Community redesign: CommunityController is now scoped to staff-only groups (all that's
+// left of the old flat "groups" concept once Clubs/ClassroomDiscussions moved to their own
+// controllers - see ClubsControllerTests.cs / ClassroomDiscussionsControllerTests.cs) and
+// Materials, which can attach to a subject and/or any one of the three community spaces.
 public class CommunityControllerTests
 {
-    private static AppDbContext NewDb()
-    {
-        var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-        return new AppDbContext(options);
-    }
+    private static AppDbContext NewDb() => new(
+        new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
     private static IConfiguration ConfigWithAllowedHosts(params string[] hosts)
     {
@@ -27,21 +26,128 @@ public class CommunityControllerTests
         return new ConfigurationBuilder().AddInMemoryCollection(data).Build();
     }
 
-    private static async Task<User> SeedTeacherAsync(AppDbContext db)
+    private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
     {
-        var teacher = new User
+        Id = Guid.NewGuid(),
+        CollegeId = collegeId ?? Guid.NewGuid(),
+        Identifier = $"user-{Guid.NewGuid():N}",
+        PasswordHash = "hash",
+        FullName = "Test User",
+        AccountType = accountType,
+        IsActive = true,
+    };
+
+    private static PermissionGrant Grant(Guid userId, string code) => new()
+    {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        PermissionCode = code,
+        Granted = true,
+        GrantedBy = Guid.NewGuid(),
+        CreatedAt = DateTime.UtcNow,
+    };
+
+    private static CommunityController ControllerAs(AppDbContext db, User user, IConfiguration? configuration = null) =>
+        new(db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build())
         {
-            Id = Guid.NewGuid(),
-            CollegeId = Guid.NewGuid(),
-            Identifier = "teacher-1",
-            PasswordHash = "hash",
-            FullName = "Teacher",
-            IsActive = true,
-            AccountType = AccountType.Teacher,
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth")),
+                },
+            },
         };
-        db.Users.Add(teacher);
+
+    [Fact]
+    public async Task CreateStaffGroup_ForbidsUsersWithoutCreateGroupPermission()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        db.Users.Add(student);
         await db.SaveChangesAsync();
-        return teacher;
+
+        var result = await ControllerAs(db, student).CreateStaffGroup(new CreateStaffGroupRequest("Staff Room"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateStaffGroup_CreatesGroupAndAddsCreatorAsMember()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        db.PermissionGrants.Add(Grant(teacher.Id, "create_group"));
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, teacher).CreateStaffGroup(new CreateStaffGroupRequest("Staff Room"));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<StaffGroupDto>(ok.Value);
+        Assert.Equal("Staff Room", dto.Name);
+        Assert.True(await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == dto.Id && m.UserId == teacher.Id));
+    }
+
+    [Fact]
+    public async Task MyStaffGroups_NeverReturnsGroupsToAStudent()
+    {
+        await using var db = NewDb();
+        var student = NewUser(AccountType.Student);
+        var staffGroup = new StaffGroup { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Staff Only" };
+        db.Users.Add(student);
+        db.StaffGroups.Add(staffGroup);
+        // Defense-in-depth: even if a membership row existed for the student by mistake.
+        db.StaffGroupMembers.Add(new StaffGroupMember { Id = Guid.NewGuid(), StaffGroupId = staffGroup.Id, UserId = student.Id });
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, student).MyStaffGroups();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<MyStaffGroupsResponse>(ok.Value);
+        Assert.Empty(response.StaffGroups);
+    }
+
+    [Fact]
+    public async Task AllStaffGroups_ScopesToCallersOwnCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.PermissionGrants.Add(Grant(admin.Id, "view_all_groups"));
+        db.StaffGroups.AddRange(
+            new StaffGroup { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Mine" },
+            new StaffGroup { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Other College" });
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).AllStaffGroups();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<MyStaffGroupsResponse>(ok.Value);
+        Assert.Single(response.StaffGroups);
+        Assert.Equal("Mine", response.StaffGroups[0].Name);
+    }
+
+    [Fact]
+    public async Task RemoveMember_RemovesTheGivenMember()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var otherMember = NewUser(AccountType.Teacher, collegeId);
+        var group = new StaffGroup { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Staff Room" };
+        db.Users.AddRange(caller, otherMember);
+        db.StaffGroups.Add(group);
+        db.StaffGroupMembers.Add(new StaffGroupMember { Id = Guid.NewGuid(), StaffGroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        var membership = new StaffGroupMember { Id = Guid.NewGuid(), StaffGroupId = group.Id, UserId = otherMember.Id, JoinedAt = DateTime.UtcNow };
+        db.StaffGroupMembers.Add(membership);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, caller).RemoveMember(group.Id, otherMember.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.DoesNotContain(db.StaffGroupMembers.Local, m => m.Id == membership.Id);
     }
 
     // #136: FileUrl previously only had to be an absolute http(s) URL — any external domain
@@ -50,10 +156,12 @@ public class CommunityControllerTests
     public async Task UploadMaterial_RejectsUrl_WhenHostNotOnAllowlist()
     {
         await using var db = NewDb();
-        var teacher = await SeedTeacherAsync(db);
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
         var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
 
-        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://evil-phish.example/x.pdf", null, null));
+        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://evil-phish.example/x.pdf", null, null, null, null));
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.Empty(await db.Materials.ToListAsync());
@@ -63,24 +171,40 @@ public class CommunityControllerTests
     public async Task UploadMaterial_Succeeds_WhenHostIsOnAllowlist()
     {
         await using var db = NewDb();
-        var teacher = await SeedTeacherAsync(db);
-        var subjectId = Guid.NewGuid();
-        db.Departments.Add(new Department { Id = Guid.NewGuid(), CollegeId = teacher.CollegeId, Name = "CS" });
-        db.Subjects.Add(new Subject { Id = subjectId, DepartmentId = db.Departments.Local.First().Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id });
+        var teacher = NewUser(AccountType.Teacher);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = teacher.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id };
+        db.Users.Add(teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
         await db.SaveChangesAsync();
         var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
 
-        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://storage.campus.local/x.pdf", subjectId, null));
+        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://storage.campus.local/x.pdf", subject.Id, null, null, null));
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         Assert.IsType<MaterialDto>(ok.Value);
     }
 
     [Fact]
+    public async Task UploadMaterial_RejectsUnknownClub()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://storage.campus.local/x.pdf", null, Guid.NewGuid(), null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
     public async Task DownloadMaterial_Redirects_WhenFileHostIsOnAllowlist()
     {
         await using var db = NewDb();
-        var teacher = await SeedTeacherAsync(db);
+        var teacher = NewUser(AccountType.Teacher);
         var material = new Material
         {
             Id = Guid.NewGuid(),
@@ -89,6 +213,7 @@ public class CommunityControllerTests
             UploadedBy = teacher.Id,
             UploadedAt = DateTime.UtcNow,
         };
+        db.Users.Add(teacher);
         db.Materials.Add(material);
         await db.SaveChangesAsync();
         var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
@@ -105,7 +230,7 @@ public class CommunityControllerTests
     public async Task DownloadMaterial_RefusesToRedirect_WhenFileHostIsNotOnAllowlist()
     {
         await using var db = NewDb();
-        var teacher = await SeedTeacherAsync(db);
+        var teacher = NewUser(AccountType.Teacher);
         var material = new Material
         {
             Id = Guid.NewGuid(),
@@ -114,6 +239,7 @@ public class CommunityControllerTests
             UploadedBy = teacher.Id,
             UploadedAt = DateTime.UtcNow,
         };
+        db.Users.Add(teacher);
         db.Materials.Add(material);
         await db.SaveChangesAsync();
         var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
@@ -125,640 +251,60 @@ public class CommunityControllerTests
         Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
     }
 
-    private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
+    [Fact]
+    public async Task DownloadMaterial_AllowsClubMemberToDownloadClubMaterial()
     {
-        Id = Guid.NewGuid(),
-        CollegeId = collegeId ?? Guid.NewGuid(),
-        Identifier = $"user-{Guid.NewGuid():N}",
-        PasswordHash = "hash",
-        FullName = "Test User",
-        AccountType = accountType,
-        IsActive = true,
-    };
-
-    // Mirrors PermissionService's actual resolution (role_default_permissions), but as a
-    // direct grant so tests don't need to seed roles/role-bindings just to exercise the
-    // controller's permission check.
-    private static PermissionGrant GrantCreateGroup(Guid userId) => new()
-    {
-        Id = Guid.NewGuid(),
-        UserId = userId,
-        PermissionCode = "create_group",
-        Granted = true,
-        GrantedBy = Guid.NewGuid(),
-        CreatedAt = DateTime.UtcNow,
-    };
-
-    private static PermissionGrant GrantViewAllGroups(Guid userId) => new()
-    {
-        Id = Guid.NewGuid(),
-        UserId = userId,
-        PermissionCode = "view_all_groups",
-        Granted = true,
-        GrantedBy = Guid.NewGuid(),
-        CreatedAt = DateTime.UtcNow,
-    };
-
-    private static CommunityController ControllerAs(AppDbContext db, User user, IConfiguration? configuration = null)
-    {
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new CommunityController(db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build())
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var uploader = NewUser(AccountType.Teacher, collegeId);
+        var club = new Club { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", CreatedAt = DateTime.UtcNow };
+        var material = new Material
         {
-            ControllerContext = new ControllerContext
-            {
-                HttpContext = new DefaultHttpContext { User = principal },
-            },
+            Id = Guid.NewGuid(),
+            Title = "Rules",
+            FileUrl = "https://storage.campus.local/rules.pdf",
+            ClubId = club.Id,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
         };
-    }
-
-    // TWA-05, AWA-12
-    [Fact]
-    public async Task Twa05_CreateGroup_ForbidsUsersWithoutCreateGroupPermission()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
+        db.Users.AddRange(student, uploader);
+        db.Clubs.Add(club);
+        db.ClubMembers.Add(new ClubMember { Id = Guid.NewGuid(), ClubId = club.Id, UserId = student.Id, JoinedAt = DateTime.UtcNow });
+        db.Materials.Add(material);
         await db.SaveChangesAsync();
+        var controller = ControllerAs(db, student, ConfigWithAllowedHosts("storage.campus.local"));
 
-        var controller = ControllerAs(db, student);
-        var result = await controller.CreateGroup(new CreateGroupRequest("Chess Club", GroupType.Club, null));
+        var result = await controller.DownloadMaterial(material.Id);
 
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    // TWA-05
-    [Fact]
-    public async Task Twa05_CreateGroup_RejectsClassType_ReservedForApi02AutoProvisioning()
-    {
-        await using var db = NewDb();
-        var teacher = NewUser(AccountType.Teacher);
-        db.Users.Add(teacher);
-        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, teacher);
-        var result = await controller.CreateGroup(new CreateGroupRequest("Not a real class group", GroupType.Class, null));
-
-        Assert.IsType<BadRequestObjectResult>(result.Result);
-    }
-
-    // TWA-05, AWA-12
-    [Fact]
-    public async Task Twa05_CreateGroup_CreatesGroupAndAddsCreatorAsMember()
-    {
-        await using var db = NewDb();
-        var teacher = NewUser(AccountType.Teacher);
-        db.Users.Add(teacher);
-        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, teacher);
-        var result = await controller.CreateGroup(new CreateGroupRequest("Staff Room", GroupType.TeacherOnly, null));
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var dto = Assert.IsType<GroupDto>(ok.Value);
-        Assert.Equal("Staff Room", dto.Name);
-        Assert.True(await db.GroupMembers.AnyAsync(m => m.GroupId == dto.Id && m.UserId == teacher.Id));
-    }
-
-    // TWA-05
-    [Fact]
-    public async Task Twa05_CreateGroup_RejectsUnknownSectionId()
-    {
-        await using var db = NewDb();
-        var teacher = NewUser(AccountType.Teacher);
-        db.Users.Add(teacher);
-        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, teacher);
-        var result = await controller.CreateGroup(new CreateGroupRequest("Ghost Section Group", GroupType.SubjectSection, Guid.NewGuid()));
-
-        Assert.IsType<BadRequestObjectResult>(result.Result);
-    }
-
-    // SDA-16
-    [Fact]
-    public async Task Sda16_MyGroups_OnlyReturnsGroupsCallerIsAMemberOf()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        var otherStudent = NewUser(AccountType.Student);
-        db.Users.AddRange(student, otherStudent);
-        var myGroup = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Mine", Type = GroupType.Club };
-        var otherGroup = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Not Mine", Type = GroupType.Club };
-        db.Groups.AddRange(myGroup, otherGroup);
-        db.GroupMembers.AddRange(
-            new GroupMember { Id = Guid.NewGuid(), GroupId = myGroup.Id, UserId = student.Id },
-            new GroupMember { Id = Guid.NewGuid(), GroupId = otherGroup.Id, UserId = otherStudent.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.MyGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<MyGroupsResponse>(ok.Value);
-        Assert.Single(response.Groups);
-        Assert.Equal("Mine", response.Groups[0].Name);
-    }
-
-    // SDA-16: acceptance-critical — "a teacher-only group is not visible to any student".
-    [Fact]
-    public async Task Sda16_MyGroups_ExcludesTeacherOnlyGroups_ForStudentAccounts_EvenIfSomehowAMember()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var teacherOnlyGroup = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Staff Only", Type = GroupType.TeacherOnly };
-        db.Groups.Add(teacherOnlyGroup);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = teacherOnlyGroup.Id, UserId = student.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.MyGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<MyGroupsResponse>(ok.Value);
-        Assert.Empty(response.Groups);
-    }
-
-    // SDA-16
-    [Fact]
-    public async Task Sda16_CreatePost_ForbidsNonMembers()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.CreatePost(group.Id, new CreatePostRequest("hello"));
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    // SDA-16
-    [Fact]
-    public async Task Sda16_CreatePost_RejectsEmptyContent()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = student.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.CreatePost(group.Id, new CreatePostRequest("   "));
-
-        Assert.IsType<BadRequestObjectResult>(result.Result);
-    }
-
-    // SDA-16
-    [Fact]
-    public async Task Sda16_CreatePost_CreatesPost_ForGroupMember()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = student.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.CreatePost(group.Id, new CreatePostRequest("First post!"));
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var dto = Assert.IsType<GroupPostDto>(ok.Value);
-        Assert.Equal("First post!", dto.Content);
-        Assert.Equal(student.Id, dto.AuthorId);
-        Assert.Single(await db.GroupPosts.Where(p => p.GroupId == group.Id).ToListAsync());
-    }
-
-    // AWA-06: "no group is excluded from Admin's view regardless of who created it".
-    [Fact]
-    public async Task Awa06_AllGroups_ForbidsCallersWithoutViewAllGroupsPermission()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.AllGroups();
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    // AWA-06 within the caller's college: every group in the college is returned regardless
-    // of who created it or whether the caller is a member. Updated from the prior version
-    // that seeded both groups in *different random colleges* (neither the admin's) and
-    // asserted both came back — that encoded the #126 cross-college IDOR this fix closes.
-    [Fact]
-    public async Task Awa06_AllGroups_ReturnsEveryGroupInCallersCollege_RegardlessOfMembership()
-    {
-        await using var db = NewDb();
-        var admin = NewUser(AccountType.AdminTier);
-        db.Users.Add(admin);
-        db.PermissionGrants.Add(GrantViewAllGroups(admin.Id));
-        db.Groups.AddRange(
-            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Group A", Type = GroupType.Club, CreatedBy = Guid.NewGuid() },
-            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Group B", Type = GroupType.SubjectSection, CreatedBy = Guid.NewGuid() });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, admin);
-        var result = await controller.AllGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<MyGroupsResponse>(ok.Value);
-        Assert.Equal(2, response.Groups.Count);
-    }
-
-    // #126 (fix: enforce college scope on groups) — a view_all_groups holder must only see
-    // their own college's groups, never another college's.
-    [Fact]
-    public async Task Awa06_AllGroups_ExcludesGroupsFromOtherColleges()
-    {
-        await using var db = NewDb();
-        var admin = NewUser(AccountType.AdminTier);
-        db.Users.Add(admin);
-        db.PermissionGrants.Add(GrantViewAllGroups(admin.Id));
-        db.Groups.AddRange(
-            new Group { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "Mine", Type = GroupType.Club, CreatedBy = Guid.NewGuid() },
-            new Group { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Other College", Type = GroupType.Club, CreatedBy = Guid.NewGuid() });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, admin);
-        var result = await controller.AllGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<MyGroupsResponse>(ok.Value);
-        var group = Assert.Single(response.Groups);
-        Assert.Equal("Mine", group.Name);
-    }
-
-    // TWA-05, SDA-16: "view and post in groups they belong to" — the view half.
-    [Fact]
-    public async Task Twa05Sda16_ListPosts_ForbidsNonMembers()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.ListPosts(group.Id);
-
-        Assert.IsType<ForbidResult>(result.Result);
+        Assert.IsType<RedirectResult>(result);
     }
 
     [Fact]
-    public async Task Twa05Sda16_ListPosts_ReturnsGroupPostsNewestFirst_ForMembers()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = student.Id });
-        db.GroupPosts.AddRange(
-            new GroupPost { Id = Guid.NewGuid(), GroupId = group.Id, AuthorId = student.Id, Content = "Older", CreatedAt = DateTime.UtcNow.AddMinutes(-5) },
-            new GroupPost { Id = Guid.NewGuid(), GroupId = group.Id, AuthorId = student.Id, Content = "Newer", CreatedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.ListPosts(group.Id);
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var posts = Assert.IsType<List<GroupPostDto>>(ok.Value);
-        Assert.Equal(2, posts.Count);
-        Assert.Equal("Newer", posts[0].Content);
-        Assert.Equal("Older", posts[1].Content);
-    }
-
-    // SDA-16: material shared in a group must surface in that group's Materials list
-    // without a separate upload step, i.e. reading the same rows TWA-06 writes.
-    [Fact]
-    public async Task Sda16_ListGroupMaterials_ForbidsNonMembers()
-    {
-        await using var db = NewDb();
-        var student = NewUser(AccountType.Student);
-        db.Users.Add(student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.ListGroupMaterials(group.Id);
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task Sda16_ListGroupMaterials_ReturnsMaterialsSharedInTheGroup()
-    {
-        await using var db = NewDb();
-        var teacher = NewUser(AccountType.Teacher);
-        var student = NewUser(AccountType.Student);
-        db.Users.AddRange(teacher, student);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = student.CollegeId, Name = "Club", Type = GroupType.Club };
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = student.Id });
-        db.Materials.Add(new Material { Id = Guid.NewGuid(), GroupId = group.Id, Title = "Slides", FileUrl = "https://example.com/slides.pdf", UploadedBy = teacher.Id, UploadedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, student);
-        var result = await controller.ListGroupMaterials(group.Id);
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var materials = Assert.IsType<List<MaterialDto>>(ok.Value);
-        var entry = Assert.Single(materials);
-        Assert.Equal("Slides", entry.Title);
-    }
-
-    // API-02: "one class group created per class, every semester... no manual step required."
-    [Fact]
-    public async Task Api02_ProvisionClassGroups_ForbidsNonAdmins()
-    {
-        await using var db = NewDb();
-        var teacher = NewUser(AccountType.Teacher);
-        db.Users.Add(teacher);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, teacher);
-        var result = await controller.ProvisionClassGroups();
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task Api02_ProvisionClassGroups_CreatesOneGroupPerSectionAndEnrollsStudents()
+    public async Task DownloadMaterial_ForbidsNonMemberFromClubMaterial()
     {
         await using var db = NewDb();
         var collegeId = Guid.NewGuid();
-        var admin = NewUser(AccountType.AdminTier, collegeId);
-        var student = NewUser(AccountType.Student, collegeId);
-        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
-        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 3, Name = "3rd Year CSE - A" };
-        db.Users.AddRange(admin, student);
-        db.Departments.Add(department);
-        db.Sections.Add(section);
-        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id });
+        var outsider = NewUser(AccountType.Student, collegeId);
+        var uploader = NewUser(AccountType.Teacher, collegeId);
+        var club = new Club { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", CreatedAt = DateTime.UtcNow };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Rules",
+            FileUrl = "https://storage.campus.local/rules.pdf",
+            ClubId = club.Id,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.AddRange(outsider, uploader);
+        db.Clubs.Add(club);
+        db.Materials.Add(material);
         await db.SaveChangesAsync();
+        var controller = ControllerAs(db, outsider, ConfigWithAllowedHosts("storage.campus.local"));
 
-        var controller = ControllerAs(db, admin);
-        var result = await controller.ProvisionClassGroups();
+        var result = await controller.DownloadMaterial(material.Id);
 
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<ProvisionClassGroupsResponse>(ok.Value);
-        Assert.Equal(1, response.GroupsCreated);
-        Assert.Equal(1, response.MembershipsAdded);
-
-        var group = Assert.Single(await db.Groups.Where(g => g.SectionId == section.Id && g.Type == GroupType.Class).ToListAsync());
-        Assert.Equal("3rd Year CSE - A", group.Name);
-        Assert.True(await db.GroupMembers.AnyAsync(m => m.GroupId == group.Id && m.UserId == student.Id));
-    }
-
-    [Fact]
-    public async Task Api02_ProvisionClassGroups_IsIdempotent_SkipsExistingGroupsAndAvoidsDuplicateMemberships()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var admin = NewUser(AccountType.AdminTier, collegeId);
-        var student = NewUser(AccountType.Student, collegeId);
-        var newStudent = NewUser(AccountType.Student, collegeId);
-        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
-        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 3, Name = "3rd Year CSE - A" };
-        var existingGroup = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = section.Name, Type = GroupType.Class, SectionId = section.Id, CreatedBy = admin.Id };
-        db.Users.AddRange(admin, student, newStudent);
-        db.Departments.Add(department);
-        db.Sections.Add(section);
-        db.Groups.Add(existingGroup);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = existingGroup.Id, UserId = student.Id });
-        db.SectionEnrollments.AddRange(
-            new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = student.Id },
-            new SectionEnrollment { Id = Guid.NewGuid(), SectionId = section.Id, StudentId = newStudent.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, admin);
-        var result = await controller.ProvisionClassGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<ProvisionClassGroupsResponse>(ok.Value);
-        Assert.Equal(0, response.GroupsCreated);
-        Assert.Equal(1, response.MembershipsAdded);
-        Assert.Single(await db.Groups.Where(g => g.SectionId == section.Id).ToListAsync());
-        Assert.Equal(2, await db.GroupMembers.CountAsync(m => m.GroupId == existingGroup.Id));
-    }
-
-    // #114 review: an Admin at one college must not provision or re-sync class groups
-    // for another college's sections.
-    [Fact]
-    public async Task Api02_ProvisionClassGroups_DoesNotTouchOtherColleges()
-    {
-        await using var db = NewDb();
-        var adminCollegeId = Guid.NewGuid();
-        var otherCollegeId = Guid.NewGuid();
-        var admin = NewUser(AccountType.AdminTier, adminCollegeId);
-        var otherStudent = NewUser(AccountType.Student, otherCollegeId);
-        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = otherCollegeId, Name = "CS" };
-        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Year = 1, Name = "1st Year CSE - A" };
-        db.Users.AddRange(admin, otherStudent);
-        db.Departments.Add(otherDepartment);
-        db.Sections.Add(otherSection);
-        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = otherSection.Id, StudentId = otherStudent.Id });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, admin);
-        var result = await controller.ProvisionClassGroups();
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var response = Assert.IsType<ProvisionClassGroupsResponse>(ok.Value);
-        Assert.Equal(0, response.GroupsCreated);
-        Assert.Equal(0, response.MembershipsAdded);
-        Assert.False(await db.Groups.AnyAsync(g => g.SectionId == otherSection.Id));
-    }
-
-    // Phase 6 - group membership management.
-    [Fact]
-    public async Task ListMembers_ForbidsCallerWhoIsNotAMember()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var outsider = NewUser(AccountType.Teacher, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.Add(outsider);
-        db.Groups.Add(group);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, outsider);
-        var result = await controller.ListMembers(group.Id);
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task ListMembers_ReturnsMembersForGroupCallerBelongsTo()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var member = NewUser(AccountType.Teacher, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.Add(member);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = member.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, member);
-        var result = await controller.ListMembers(group.Id);
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var members = Assert.IsType<List<GroupMemberDto>>(ok.Value);
-        var dto = Assert.Single(members);
-        Assert.Equal(member.Id, dto.UserId);
-    }
-
-    [Fact]
-    public async Task AddMember_ForbidsCallerWhoIsNotAMember()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var outsider = NewUser(AccountType.Teacher, collegeId);
-        var newMember = NewUser(AccountType.Student, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.AddRange(outsider, newMember);
-        db.Groups.Add(group);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, outsider);
-        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
-
-        Assert.IsType<ForbidResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task AddMember_RejectsClassTypeGroup()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var newMember = NewUser(AccountType.Student, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "1st Year CSE - A", Type = GroupType.Class };
-        db.Users.AddRange(caller, newMember);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
-
-        Assert.IsType<BadRequestObjectResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task AddMember_RejectsUserFromADifferentCollege()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var otherCollegeUser = NewUser(AccountType.Student, Guid.NewGuid());
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.AddRange(caller, otherCollegeUser);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(otherCollegeUser.Id));
-
-        Assert.IsType<BadRequestObjectResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task AddMember_RejectsDuplicateMembership()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var existingMember = NewUser(AccountType.Student, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.AddRange(caller, existingMember);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = existingMember.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(existingMember.Id));
-
-        Assert.IsType<ConflictObjectResult>(result.Result);
-    }
-
-    [Fact]
-    public async Task AddMember_AddsMemberToGroup()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var newMember = new User { Id = Guid.NewGuid(), CollegeId = collegeId, Identifier = "s1", PasswordHash = "hash", FullName = "New Student", AccountType = AccountType.Student, IsActive = true };
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.AddRange(caller, newMember);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
-
-        var ok = Assert.IsType<OkObjectResult>(result.Result);
-        var dto = Assert.IsType<GroupMemberDto>(ok.Value);
-        Assert.Equal("New Student", dto.UserFullName);
-    }
-
-    [Fact]
-    public async Task RemoveMember_RejectsClassTypeGroup()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "1st Year CSE - A", Type = GroupType.Class };
-        db.Users.Add(caller);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.RemoveMember(group.Id, caller.Id);
-
-        Assert.IsType<BadRequestObjectResult>(result);
-    }
-
-    [Fact]
-    public async Task RemoveMember_RemovesMembership()
-    {
-        await using var db = NewDb();
-        var collegeId = Guid.NewGuid();
-        var caller = NewUser(AccountType.Teacher, collegeId);
-        var otherMember = NewUser(AccountType.Student, collegeId);
-        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
-        db.Users.AddRange(caller, otherMember);
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
-        var membership = new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = otherMember.Id, JoinedAt = DateTime.UtcNow };
-        db.GroupMembers.Add(membership);
-        await db.SaveChangesAsync();
-
-        var controller = ControllerAs(db, caller);
-        var result = await controller.RemoveMember(group.Id, otherMember.Id);
-
-        Assert.IsType<NoContentResult>(result);
-        Assert.DoesNotContain(db.GroupMembers.Local, m => m.Id == membership.Id);
+        Assert.IsType<ForbidResult>(result);
     }
 }

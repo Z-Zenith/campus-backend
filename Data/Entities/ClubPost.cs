@@ -1,21 +1,20 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Data.Entities;
 
-[Table("group_posts")]
-[Index("GroupId", "CreatedAt", Name = "idx_group_posts_group", IsDescending = new[] { false, true })]
-public partial class GroupPost
+[Table("club_posts")]
+[Index("ClubId", "CreatedAt", Name = "idx_club_posts_club", IsDescending = new[] { false, true })]
+public partial class ClubPost
 {
     [Key]
     [Column("id")]
     public Guid Id { get; set; }
 
-    [Column("group_id")]
-    public Guid GroupId { get; set; }
+    [Column("club_id")]
+    public Guid ClubId { get; set; }
 
     [Column("author_id")]
     public Guid AuthorId { get; set; }
@@ -27,10 +26,10 @@ public partial class GroupPost
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey("AuthorId")]
-    [InverseProperty("GroupPosts")]
+    [InverseProperty("ClubPosts")]
     public virtual User Author { get; set; } = null!;
 
-    [ForeignKey("GroupId")]
-    [InverseProperty("GroupPosts")]
-    public virtual Group Group { get; set; } = null!;
+    [ForeignKey("ClubId")]
+    [InverseProperty("ClubPosts")]
+    public virtual Club Club { get; set; } = null!;
 }

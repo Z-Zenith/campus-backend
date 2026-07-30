@@ -9,105 +9,26 @@ using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Controllers;
 
-// Track 2 surface (community/groups/materials).
+// Track 2 surface: staff-only groups (all that's left of the old flat "groups" concept once
+// Clubs and ClassroomDiscussions moved to their own controllers - see
+// db/init/01_schema.sql's comment on `staff_groups`) and Materials, which can attach to a
+// subject and/or any one of the three community spaces.
 [ApiController]
 [Route("api/v1")]
 [Authorize]
 public class CommunityController(AppDbContext db, IPermissionService permissions, IConfiguration configuration) : ControllerBase
 {
-    // API-02: "one class group created per class [section], every semester... no manual
-    // step required." No semester-start scheduler exists yet, so this is triggered
-    // manually (or by a future scheduled job) rather than firing automatically. Fully
-    // idempotent: a section that already has a Class group is skipped when creating, and
-    // every Class group's membership is re-synced against current section_enrollments on
-    // every call, so newly-enrolled students get added without duplicating existing rows.
-    [HttpPost("groups/provision-class-groups")]
-    public async Task<ActionResult<ProvisionClassGroupsResponse>> ProvisionClassGroups()
-    {
-        var caller = await CurrentUserAsync();
-        if (caller is null)
-        {
-            return Unauthorized();
-        }
-        if (caller.AccountType != AccountType.AdminTier)
-        {
-            return Forbid();
-        }
-
-        // #114 review: scope to the caller's own college, matching CreateGroup's
-        // creator.CollegeId scoping — without this an Admin at one college could
-        // provision/modify class groups institution-wide across all colleges.
-        var sectionsNeedingGroups = await db.Sections
-            .Include(s => s.Department)
-            .Where(s => s.Department.CollegeId == caller.CollegeId)
-            .Where(s => !db.Groups.Any(g => g.SectionId == s.Id && g.Type == GroupType.Class))
-            .ToListAsync();
-
-        foreach (var section in sectionsNeedingGroups)
-        {
-            db.Groups.Add(new Group
-            {
-                Id = Guid.NewGuid(),
-                CollegeId = section.Department.CollegeId,
-                Name = section.Name,
-                Type = GroupType.Class,
-                SectionId = section.Id,
-                CreatedBy = caller.Id,
-            });
-        }
-        await db.SaveChangesAsync();
-
-        var classGroups = await db.Groups
-            .Where(g => g.Type == GroupType.Class && g.CollegeId == caller.CollegeId)
-            .ToListAsync();
-        var membershipsAdded = 0;
-        foreach (var group in classGroups)
-        {
-            var enrolledStudentIds = await db.SectionEnrollments
-                .Where(e => e.SectionId == group.SectionId)
-                .Select(e => e.StudentId)
-                .ToListAsync();
-            var existingMemberIds = await db.GroupMembers
-                .Where(m => m.GroupId == group.Id)
-                .Select(m => m.UserId)
-                .ToListAsync();
-
-            foreach (var studentId in enrolledStudentIds.Except(existingMemberIds))
-            {
-                db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = studentId });
-                membershipsAdded++;
-            }
-        }
-        await db.SaveChangesAsync();
-
-        return Ok(new ProvisionClassGroupsResponse(sectionsNeedingGroups.Count, membershipsAdded));
-    }
-
-    // TWA-05, AWA-12. The auto-provisioned class group (API-02) is not created through
-    // this endpoint — GroupType.Class is reserved for that automation, so a caller can't
-    // hand-create a second "class group" for a section.
-    [HttpPost("groups")]
-    public async Task<ActionResult<GroupDto>> CreateGroup(CreateGroupRequest request)
+    [HttpPost("staff-groups")]
+    public async Task<ActionResult<StaffGroupDto>> CreateStaffGroup(CreateStaffGroupRequest request)
     {
         var userId = CurrentUserId();
         if (!await permissions.HasPermissionAsync(userId, "create_group"))
         {
             return Forbid();
         }
-
-        if (request.Type == GroupType.Class)
-        {
-            return BadRequest(new { error = "reserved_group_type", message = "Class groups are auto-provisioned (API-02), not created directly." });
-        }
-
         if (string.IsNullOrWhiteSpace(request.Name))
         {
             return BadRequest(new { error = "name_required", message = "Group name must not be empty." });
-        }
-
-        if (request.SectionId is not null && !await db.Sections.AnyAsync(s => s.Id == request.SectionId))
-        {
-            return BadRequest(new { error = "unknown_section", message = "No section exists with that id." });
         }
 
         var creator = await db.Users.FindAsync(userId);
@@ -116,67 +37,52 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             return Unauthorized();
         }
 
-        var group = new Group
+        var group = new StaffGroup
         {
             Id = Guid.NewGuid(),
             CollegeId = creator.CollegeId,
             Name = request.Name.Trim(),
-            Type = request.Type,
-            SectionId = request.SectionId,
             CreatedBy = userId,
+            CreatedAt = DateTime.UtcNow,
         };
-        db.Groups.Add(group);
-        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = userId });
+        db.StaffGroups.Add(group);
+        db.StaffGroupMembers.Add(new StaffGroupMember { Id = Guid.NewGuid(), StaffGroupId = group.Id, UserId = userId });
         await db.SaveChangesAsync();
 
         return Ok(ToDto(group));
     }
 
-    // Phase 6 - group membership management. Gated the same way as posts/materials above
-    // (GroupMembers.Any() - caller must already be a member), not a separate elevated
-    // permission - consistent with this controller's existing "membership is the access
-    // control" model.
-    [HttpGet("groups/{id}/members")]
-    public async Task<ActionResult<List<GroupMemberDto>>> ListMembers(Guid id)
+    [HttpGet("staff-groups/{id}/members")]
+    public async Task<ActionResult<List<StaffGroupMemberDto>>> ListMembers(Guid id)
     {
         var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == userId))
         {
             return Forbid();
         }
 
-        var members = await db.GroupMembers
+        var members = await db.StaffGroupMembers
             .Include(m => m.User)
-            .Where(m => m.GroupId == id)
+            .Where(m => m.StaffGroupId == id)
             .OrderBy(m => m.JoinedAt)
-            .Select(m => new GroupMemberDto(m.Id, m.UserId, m.User.FullName, m.JoinedAt))
+            .Select(m => new StaffGroupMemberDto(m.Id, m.UserId, m.User.FullName, m.JoinedAt))
             .ToListAsync();
         return Ok(members);
     }
 
-    // Class-type groups are auto-provisioned and their membership is kept in sync with
-    // section_enrollments by ProvisionClassGroups - manually adding/removing a member here
-    // would just get silently overwritten (or re-added) on the next provisioning run, same
-    // "not through this endpoint" precedent CreateGroup already applies to GroupType.Class.
-    [HttpPost("groups/{id}/members")]
-    public async Task<ActionResult<GroupMemberDto>> AddMember(Guid id, AddGroupMemberRequest request)
+    [HttpPost("staff-groups/{id}/members")]
+    public async Task<ActionResult<StaffGroupMemberDto>> AddMember(Guid id, AddStaffGroupMemberRequest request)
     {
-        var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        var callerId = CurrentUserId();
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == callerId))
         {
             return Forbid();
         }
 
-        var group = await db.Groups.FindAsync(id);
+        var group = await db.StaffGroups.FindAsync(id);
         if (group is null)
         {
             return NotFound();
-        }
-        if (group.Type == GroupType.Class)
-        {
-            return BadRequest(new { error = "reserved_group_type", message = "Class group membership is auto-synced from section enrollment, not managed directly." });
         }
 
         var newMember = await db.Users.FindAsync(request.UserId);
@@ -184,59 +90,40 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         {
             return BadRequest(new { error = "unknown_user", message = "No user exists with that id at this college." });
         }
-
-        if (await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == request.UserId))
+        if (await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == request.UserId))
         {
             return Conflict(new { error = "already_member", message = "This user is already a member of the group." });
         }
 
-        var membership = new GroupMember { Id = Guid.NewGuid(), GroupId = id, UserId = request.UserId, JoinedAt = DateTime.UtcNow };
-        db.GroupMembers.Add(membership);
+        var membership = new StaffGroupMember { Id = Guid.NewGuid(), StaffGroupId = id, UserId = request.UserId, JoinedAt = DateTime.UtcNow };
+        db.StaffGroupMembers.Add(membership);
         await db.SaveChangesAsync();
 
-        return Ok(new GroupMemberDto(membership.Id, newMember.Id, newMember.FullName, membership.JoinedAt));
+        return Ok(new StaffGroupMemberDto(membership.Id, newMember.Id, newMember.FullName, membership.JoinedAt));
     }
 
-    [HttpDelete("groups/{id}/members/{userId}")]
+    [HttpDelete("staff-groups/{id}/members/{userId}")]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
         var callerId = CurrentUserId();
-        var callerIsMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == callerId);
-        if (!callerIsMember)
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == callerId))
         {
             return Forbid();
         }
 
-        var group = await db.Groups.FindAsync(id);
-        if (group is null)
-        {
-            return NotFound();
-        }
-        if (group.Type == GroupType.Class)
-        {
-            return BadRequest(new { error = "reserved_group_type", message = "Class group membership is auto-synced from section enrollment, not managed directly." });
-        }
-
-        var membership = await db.GroupMembers.FirstOrDefaultAsync(m => m.GroupId == id && m.UserId == userId);
+        var membership = await db.StaffGroupMembers.FirstOrDefaultAsync(m => m.StaffGroupId == id && m.UserId == userId);
         if (membership is null)
         {
             return NotFound();
         }
 
-        db.GroupMembers.Remove(membership);
+        db.StaffGroupMembers.Remove(membership);
         await db.SaveChangesAsync();
         return NoContent();
     }
 
-    // AWA-06: "no group is excluded from Admin's view regardless of who created it" — an
-    // institution here means the caller's own college (AWA-06 is an institution-wide, i.e.
-    // college-wide, view). #126: view_all_groups is a global-scoped permission enforced
-    // platform-wide today; without the college filter any holder could enumerate every
-    // group across every college. Scoped to the caller's own college, mirroring
-    // ProvisionClassGroups above (and RolesController's per-college list filtering), so the
-    // AWA-06 "regardless of who created it" intent is preserved within the college.
-    [HttpGet("groups")]
-    public async Task<ActionResult<MyGroupsResponse>> AllGroups()
+    [HttpGet("staff-groups")]
+    public async Task<ActionResult<MyStaffGroupsResponse>> AllStaffGroups()
     {
         var caller = await CurrentUserAsync();
         if (caller is null)
@@ -248,15 +135,12 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             return Forbid();
         }
 
-        var groups = await db.Groups
-            .Where(g => g.CollegeId == caller.CollegeId)
-            .ToListAsync();
-        return Ok(new MyGroupsResponse(groups.Select(ToDto).ToList()));
+        var groups = await db.StaffGroups.Where(g => g.CollegeId == caller.CollegeId).ToListAsync();
+        return Ok(new MyStaffGroupsResponse(groups.Select(ToDto).ToList()));
     }
 
-    // SDA-16
-    [HttpGet("groups/mine")]
-    public async Task<ActionResult<MyGroupsResponse>> MyGroups()
+    [HttpGet("staff-groups/mine")]
+    public async Task<ActionResult<MyStaffGroupsResponse>> MyStaffGroups()
     {
         var userId = CurrentUserId();
         var user = await db.Users.FindAsync(userId);
@@ -264,87 +148,75 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         {
             return Unauthorized();
         }
+        if (user.AccountType == AccountType.Student)
+        {
+            return Ok(new MyStaffGroupsResponse([]));
+        }
 
-        var groups = await db.GroupMembers
+        var groups = await db.StaffGroupMembers
             .Where(m => m.UserId == userId)
-            .Select(m => m.Group)
-            // Defense-in-depth: a teacher-only group must never be visible to a student,
-            // even if a membership row existed for one by mistake.
-            .Where(g => user.AccountType != AccountType.Student || g.Type != GroupType.TeacherOnly)
+            .Select(m => m.StaffGroup)
             .ToListAsync();
-
-        return Ok(new MyGroupsResponse(groups.Select(ToDto).ToList()));
+        return Ok(new MyStaffGroupsResponse(groups.Select(ToDto).ToList()));
     }
 
-    // SDA-16
-    [HttpPost("groups/{id}/posts")]
-    public async Task<ActionResult<GroupPostDto>> CreatePost(Guid id, CreatePostRequest request)
+    [HttpPost("staff-groups/{id}/posts")]
+    public async Task<ActionResult<StaffGroupPostDto>> CreatePost(Guid id, CreateStaffGroupPostRequest request)
     {
         var userId = CurrentUserId();
         if (string.IsNullOrWhiteSpace(request.Content))
         {
             return BadRequest(new { error = "content_required", message = "Post content must not be empty." });
         }
-
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == userId))
         {
             return Forbid();
         }
 
-        var post = new GroupPost
+        var post = new StaffGroupPost
         {
             Id = Guid.NewGuid(),
-            GroupId = id,
+            StaffGroupId = id,
             AuthorId = userId,
             Content = request.Content.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
-        db.GroupPosts.Add(post);
+        db.StaffGroupPosts.Add(post);
         await db.SaveChangesAsync();
 
-        return Ok(new GroupPostDto(post.Id, post.GroupId, post.AuthorId, post.Content, post.CreatedAt));
+        return Ok(new StaffGroupPostDto(post.Id, post.StaffGroupId, post.AuthorId, post.Content, post.CreatedAt));
     }
 
-    // TWA-05, SDA-16: "view and post in groups they belong to" requires a way to actually
-    // list what's been posted — CreatePost alone can't satisfy that acceptance criterion.
-    [HttpGet("groups/{id}/posts")]
-    public async Task<ActionResult<List<GroupPostDto>>> ListPosts(Guid id)
+    [HttpGet("staff-groups/{id}/posts")]
+    public async Task<ActionResult<List<StaffGroupPostDto>>> ListPosts(Guid id)
     {
         var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == userId))
         {
             return Forbid();
         }
 
-        var posts = await db.GroupPosts
-            .Where(p => p.GroupId == id)
+        var posts = await db.StaffGroupPosts
+            .Where(p => p.StaffGroupId == id)
             .OrderByDescending(p => p.CreatedAt)
-            .Select(p => new GroupPostDto(p.Id, p.GroupId, p.AuthorId, p.Content, p.CreatedAt))
+            .Select(p => new StaffGroupPostDto(p.Id, p.StaffGroupId, p.AuthorId, p.Content, p.CreatedAt))
             .ToListAsync();
-
         return Ok(posts);
     }
 
-    // SDA-16: "shall surface any material shared in a group inside that group's Materials
-    // section... without a separate upload step" — this is that surface, reading straight
-    // off the same Material rows TWA-06's upload endpoint writes (GroupId set).
-    [HttpGet("groups/{id}/materials")]
-    public async Task<ActionResult<List<MaterialDto>>> ListGroupMaterials(Guid id)
+    [HttpGet("staff-groups/{id}/materials")]
+    public async Task<ActionResult<List<MaterialDto>>> ListStaffGroupMaterials(Guid id)
     {
         var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == id && m.UserId == userId))
         {
             return Forbid();
         }
 
         var materials = await db.Materials
-            .Where(m => m.GroupId == id)
+            .Where(m => m.StaffGroupId == id)
             .OrderByDescending(m => m.UploadedAt)
             .ToListAsync();
-
         return Ok(materials.Select(ToDto).ToList());
     }
 
@@ -378,17 +250,25 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         {
             return BadRequest(new { error = "disallowed_host", message = "fileUrl must point at an approved storage/CDN host." });
         }
-        if (request.SubjectId is null && request.GroupId is null)
+        if (request.SubjectId is null && request.ClubId is null && request.ClassroomDiscussionId is null && request.StaffGroupId is null)
         {
-            return BadRequest(new { error = "target_required", message = "Attach material to a subject, a group, or both." });
+            return BadRequest(new { error = "target_required", message = "Attach material to a subject, club, classroom discussion, or staff group." });
         }
         if (request.SubjectId is not null && !await db.Subjects.AnyAsync(s => s.Id == request.SubjectId))
         {
             return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
         }
-        if (request.GroupId is not null && !await db.Groups.AnyAsync(g => g.Id == request.GroupId))
+        if (request.ClubId is not null && !await db.Clubs.AnyAsync(c => c.Id == request.ClubId))
         {
-            return BadRequest(new { error = "unknown_group", message = "No group exists with that id." });
+            return BadRequest(new { error = "unknown_club", message = "No club exists with that id." });
+        }
+        if (request.ClassroomDiscussionId is not null && !await db.ClassroomDiscussions.AnyAsync(d => d.Id == request.ClassroomDiscussionId))
+        {
+            return BadRequest(new { error = "unknown_classroom_discussion", message = "No classroom discussion exists with that id." });
+        }
+        if (request.StaffGroupId is not null && !await db.StaffGroups.AnyAsync(g => g.Id == request.StaffGroupId))
+        {
+            return BadRequest(new { error = "unknown_staff_group", message = "No staff group exists with that id." });
         }
 
         var material = new Material
@@ -397,7 +277,9 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             Title = request.Title.Trim(),
             FileUrl = request.FileUrl.Trim(),
             SubjectId = request.SubjectId,
-            GroupId = request.GroupId,
+            ClubId = request.ClubId,
+            ClassroomDiscussionId = request.ClassroomDiscussionId,
+            StaffGroupId = request.StaffGroupId,
             UploadedBy = uploader.Id,
             UploadedAt = DateTime.UtcNow,
         };
@@ -456,9 +338,31 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             return true;
         }
 
-        if (material.GroupId is not null)
+        if (material.ClubId is not null)
         {
-            return await db.GroupMembers.AnyAsync(m => m.GroupId == material.GroupId && m.UserId == caller.Id);
+            return await db.ClubMembers.AnyAsync(m => m.ClubId == material.ClubId && m.UserId == caller.Id);
+        }
+
+        if (material.StaffGroupId is not null)
+        {
+            return await db.StaffGroupMembers.AnyAsync(m => m.StaffGroupId == material.StaffGroupId && m.UserId == caller.Id);
+        }
+
+        if (material.ClassroomDiscussionId is not null)
+        {
+            var discussion = await db.ClassroomDiscussions.FindAsync(material.ClassroomDiscussionId);
+            if (discussion is not null)
+            {
+                if (caller.AccountType == AccountType.Student)
+                {
+                    return await db.SectionEnrollments.AnyAsync(e => e.SectionId == discussion.SectionId && e.StudentId == caller.Id);
+                }
+                if (caller.AccountType == AccountType.Teacher)
+                {
+                    return await db.TeacherSectionAssignments.AnyAsync(
+                        a => a.SectionId == discussion.SectionId && a.SubjectId == discussion.SubjectId && a.TeacherId == caller.Id);
+                }
+            }
         }
 
         if (material.SubjectId is not null)
@@ -488,7 +392,9 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
     }
 
     private static MaterialDto ToDto(Material m) =>
-        new(m.Id, m.Title, m.FileUrl, m.SubjectId, m.GroupId, m.UploadedBy, m.UploadedAt);
+        new(m.Id, m.Title, m.FileUrl, m.SubjectId, m.ClubId, m.ClassroomDiscussionId, m.StaffGroupId, m.UploadedBy, m.UploadedAt);
+
+    private static StaffGroupDto ToDto(StaffGroup g) => new(g.Id, g.Name);
 
     private static bool TryValidateUrl(string url) =>
         !string.IsNullOrWhiteSpace(url)
@@ -500,8 +406,6 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
         return await db.Users.FindAsync(userId);
     }
-
-    private static GroupDto ToDto(Group g) => new(g.Id, g.Name, g.Type.ToString(), g.SectionId);
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 }

@@ -70,7 +70,6 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connect
         .MapEnum<EventType>()
         .MapEnum<ExamType>()
         .MapEnum<FeeStatus>()
-        .MapEnum<GroupType>()
         .MapEnum<NotificationType>()
         .MapEnum<OcrStatus>()
         .MapEnum<ScopeKind>()

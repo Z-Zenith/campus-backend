@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -16,8 +16,14 @@ public partial class Material
     [Column("subject_id")]
     public Guid? SubjectId { get; set; }
 
-    [Column("group_id")]
-    public Guid? GroupId { get; set; }
+    [Column("club_id")]
+    public Guid? ClubId { get; set; }
+
+    [Column("classroom_discussion_id")]
+    public Guid? ClassroomDiscussionId { get; set; }
+
+    [Column("staff_group_id")]
+    public Guid? StaffGroupId { get; set; }
 
     [Column("uploaded_by")]
     public Guid UploadedBy { get; set; }
@@ -31,9 +37,17 @@ public partial class Material
     [Column("uploaded_at")]
     public DateTime UploadedAt { get; set; }
 
-    [ForeignKey("GroupId")]
+    [ForeignKey("ClubId")]
     [InverseProperty("Materials")]
-    public virtual Group? Group { get; set; }
+    public virtual Club? Club { get; set; }
+
+    [ForeignKey("ClassroomDiscussionId")]
+    [InverseProperty("Materials")]
+    public virtual ClassroomDiscussion? ClassroomDiscussion { get; set; }
+
+    [ForeignKey("StaffGroupId")]
+    [InverseProperty("Materials")]
+    public virtual StaffGroup? StaffGroup { get; set; }
 
     [ForeignKey("SubjectId")]
     [InverseProperty("Materials")]

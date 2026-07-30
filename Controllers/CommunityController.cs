@@ -132,6 +132,102 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         return Ok(ToDto(group));
     }
 
+    // Phase 6 - group membership management. Gated the same way as posts/materials above
+    // (GroupMembers.Any() - caller must already be a member), not a separate elevated
+    // permission - consistent with this controller's existing "membership is the access
+    // control" model.
+    [HttpGet("groups/{id}/members")]
+    public async Task<ActionResult<List<GroupMemberDto>>> ListMembers(Guid id)
+    {
+        var userId = CurrentUserId();
+        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
+        if (!isMember)
+        {
+            return Forbid();
+        }
+
+        var members = await db.GroupMembers
+            .Include(m => m.User)
+            .Where(m => m.GroupId == id)
+            .OrderBy(m => m.JoinedAt)
+            .Select(m => new GroupMemberDto(m.Id, m.UserId, m.User.FullName, m.JoinedAt))
+            .ToListAsync();
+        return Ok(members);
+    }
+
+    // Class-type groups are auto-provisioned and their membership is kept in sync with
+    // section_enrollments by ProvisionClassGroups - manually adding/removing a member here
+    // would just get silently overwritten (or re-added) on the next provisioning run, same
+    // "not through this endpoint" precedent CreateGroup already applies to GroupType.Class.
+    [HttpPost("groups/{id}/members")]
+    public async Task<ActionResult<GroupMemberDto>> AddMember(Guid id, AddGroupMemberRequest request)
+    {
+        var userId = CurrentUserId();
+        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
+        if (!isMember)
+        {
+            return Forbid();
+        }
+
+        var group = await db.Groups.FindAsync(id);
+        if (group is null)
+        {
+            return NotFound();
+        }
+        if (group.Type == GroupType.Class)
+        {
+            return BadRequest(new { error = "reserved_group_type", message = "Class group membership is auto-synced from section enrollment, not managed directly." });
+        }
+
+        var newMember = await db.Users.FindAsync(request.UserId);
+        if (newMember is null || newMember.CollegeId != group.CollegeId)
+        {
+            return BadRequest(new { error = "unknown_user", message = "No user exists with that id at this college." });
+        }
+
+        if (await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == request.UserId))
+        {
+            return Conflict(new { error = "already_member", message = "This user is already a member of the group." });
+        }
+
+        var membership = new GroupMember { Id = Guid.NewGuid(), GroupId = id, UserId = request.UserId, JoinedAt = DateTime.UtcNow };
+        db.GroupMembers.Add(membership);
+        await db.SaveChangesAsync();
+
+        return Ok(new GroupMemberDto(membership.Id, newMember.Id, newMember.FullName, membership.JoinedAt));
+    }
+
+    [HttpDelete("groups/{id}/members/{userId}")]
+    public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
+    {
+        var callerId = CurrentUserId();
+        var callerIsMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == callerId);
+        if (!callerIsMember)
+        {
+            return Forbid();
+        }
+
+        var group = await db.Groups.FindAsync(id);
+        if (group is null)
+        {
+            return NotFound();
+        }
+        if (group.Type == GroupType.Class)
+        {
+            return BadRequest(new { error = "reserved_group_type", message = "Class group membership is auto-synced from section enrollment, not managed directly." });
+        }
+
+        var membership = await db.GroupMembers.FirstOrDefaultAsync(m => m.GroupId == id && m.UserId == userId);
+        if (membership is null)
+        {
+            return NotFound();
+        }
+
+        db.GroupMembers.Remove(membership);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
     // AWA-06: "no group is excluded from Admin's view regardless of who created it" — an
     // institution here means the caller's own college (AWA-06 is an institution-wide, i.e.
     // college-wide, view). #126: view_all_groups is a global-scoped permission enforced

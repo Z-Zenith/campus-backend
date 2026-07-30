@@ -305,6 +305,7 @@ CREATE TABLE IF NOT EXISTS exam_schedules (
     end_time   time NOT NULL,
     room       text,
     created_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (section_id, subject_id, exam_type),
     CHECK (end_time > start_time)
 );

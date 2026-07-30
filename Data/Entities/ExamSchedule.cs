@@ -37,6 +37,9 @@ public partial class ExamSchedule
     [Column("created_by")]
     public Guid CreatedBy { get; set; }
 
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
     [ForeignKey("SectionId")]
     [InverseProperty("ExamSchedules")]
     public virtual Section Section { get; set; } = null!;

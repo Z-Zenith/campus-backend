@@ -8,12 +8,17 @@ RUN dotnet publish -c Release -o /app --no-restore
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
-# SEK-01 code execution (DockerCodeRunner.cs) and its integrated terminal (TerminalSessionService.cs)
-# shell out to the `docker` CLI for every submission. When backend-api runs as its own container
-# (this Dockerfile) rather than the bare `dotnet run` dev setup, it needs that CLI plus the host's
-# Docker socket bind-mounted in (see docker-compose.yml's backend-api service) — Docker-outside-
-# of-Docker. Copied from the upstream `-cli` variant rather than apt-get installing the Debian
-# `docker.io` package, which drags in dockerd/containerd this process never runs.
+# SEK-01 code execution (ContainerCodeRunner.cs) and its integrated terminal
+# (TerminalSessionService.cs) shell out to a container CLI for every submission —
+# ContainerRuntimeDetector picks Docker or Podman at startup, whichever is reachable (see
+# Services/IContainerCli.cs), but THIS image only ever bundles the Docker CLI: when
+# backend-api runs as its own container (this Dockerfile) rather than the bare `dotnet run`
+# dev setup, it needs that CLI plus the host's Docker socket bind-mounted in (see
+# docker-compose.yml's backend-api service) — Docker-outside-of-Docker. A Podman-outside-of-
+# Podman containerized deployment isn't supported by this image today; bundling a `podman`
+# client too would be a deliberate follow-up, not something to half-wire in here. Copied from
+# the upstream `-cli` variant rather than apt-get installing the Debian `docker.io` package,
+# which drags in dockerd/containerd this process never runs.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 # The docker CLI defaults its config dir to $HOME/.docker — $HOME is still /root (the image's
 # built-in default, untouched by docker-entrypoint.sh's setpriv, which changes uid/gid but not

@@ -128,10 +128,39 @@ builder.Services.AddHttpClient<IAiServicesClient, AiServicesClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["AiServices:BaseUrl"] ?? "http://ai-services:8000");
 });
 
-// SEK-01: code execution — each Run shells out to `docker run` for a throwaway
-// per-submission sandbox (see DockerCodeRunner's doc comment for why this replaced
-// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP.
-builder.Services.AddSingleton<ICodeRunner, DockerCodeRunner>();
+// 0.5: probe once at startup for a usable local container runtime (Docker, then Podman —
+// see ContainerRuntimeDetector's doc comment) and share the result as a singleton, so both
+// code-execution and the integrated terminal below shell out to whichever one is actually
+// available instead of hardcoding `docker`. Detection is synchronous here (composition-root
+// startup, not a request path) — GetAwaiter().GetResult() is deliberate, not an oversight.
+builder.Services.AddSingleton<IContainerCli>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<Program>>();
+    return ContainerRuntimeDetector.DetectAsync(logger).GetAwaiter().GetResult();
+});
+
+// SEK-01: code execution — each Run shells out to `<runtime> run` for a throwaway
+// per-submission sandbox (see ContainerCodeRunner's doc comment for why this replaced
+// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP. Registered as itself
+// (one singleton instance) AND exposed keyed ("primary") as ICodeRunner — CompositeCodeRunner
+// resolves it keyed; PreviewSessionService (B2) resolves the concrete type directly, since
+// it needs StartPersistentAsync/StopPersistentAsync, which aren't part of ICodeRunner.
+builder.Services.AddSingleton<ContainerCodeRunner>();
+builder.Services.AddKeyedSingleton<ICodeRunner>("primary", (sp, _) => sp.GetRequiredService<ContainerCodeRunner>());
+
+// B1: Piston-backed remote-execution fallback (see PistonClient's doc comment for why
+// Piston, not Judge0, per the 0.1 spike). Self-hosted, internal-only — no credentials.
+// Also keyed ("fallback"), same reasoning as "primary" above.
+builder.Services.AddHttpClient<IPistonClient, PistonClient>(client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Piston:BaseUrl"] ?? "http://piston:2000");
+});
+builder.Services.AddKeyedSingleton<ICodeRunner, RemoteCodeRunner>("fallback");
+
+// CompositeCodeRunner: ContainerCodeRunner primary, RemoteCodeRunner fallback only on an
+// infra-unreachable failure (see CompositeCodeRunner's own doc comment) — this, not
+// either runner directly, is what's actually injected wherever ICodeRunner is asked for.
+builder.Services.AddSingleton<ICodeRunner, CompositeCodeRunner>();
 
 // SEK-01: integrated terminal — persistent per-session sandbox container, reaped on an
 // idle timer (see TerminalSessionService's doc comment for scope). Singleton: the
@@ -139,6 +168,11 @@ builder.Services.AddSingleton<ICodeRunner, DockerCodeRunner>();
 // ParentLoginLockoutService above.
 builder.Services.AddSingleton<TerminalSessionService>();
 builder.Services.AddHostedService<TerminalSessionReaperHostedService>();
+
+// B2: live preview sessions (static file server or persistent server container) — same
+// singleton-plus-reaper shape as TerminalSessionService/its reaper above.
+builder.Services.AddSingleton<PreviewSessionService>();
+builder.Services.AddHostedService<PreviewSessionReaperHostedService>();
 
 // AIS-02: Copyleaks — external, credentialed (Copyleaks:Email/ApiKey/WebhookSecret).
 // No default base URL fallback: an empty ApiKey/Email already fails closed inside

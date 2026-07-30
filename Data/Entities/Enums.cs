@@ -28,3 +28,5 @@ public enum FeeStatus { Pending, Paid }
 public enum OcrStatus { Pending, Processing, Completed, Failed, NotApplicable }
 
 public enum WhitelistRequestStatus { Pending, Approved, Rejected }
+
+public enum SiteClassificationFeedbackType { ShouldAllow, ShouldBlock }

@@ -3,26 +3,32 @@ using BackendApi.Contracts;
 
 namespace BackendApi.Services;
 
-// SEK-01: executes each submission inside its own throwaway Docker container instead of
-// proxying to Judge0 (see git history for Judge0Client, removed). Judge0's isolate sandbox
-// requires cgroup v1 — this dev environment's Docker Desktop/WSL2 kernel refuses to provide
-// it (confirmed: forcing systemd.unified_cgroup_hierarchy=0 gets accepted onto the kernel
-// command line but /sys/fs/cgroup still mounts as cgroup2), and Judge0's own upstream docs
-// confirm cgroup v1 is a hard requirement of isolate itself, not a version-specific bug — so
-// no Judge0 image swap would have fixed it either. Docker/containerd's own container
-// isolation already works fine under cgroup v2 on this machine (every other container in
-// this stack proves that), so this runner uses `docker run` as the sandbox instead of
-// isolate: shells out to the `docker` CLI directly rather than adding an HTTP client or a
-// Docker Engine API NuGet dependency, matching this codebase's existing preference for
-// simple, dependency-free approaches (e.g. bespoke test fakes over a mocking library).
+// SEK-01: executes each submission inside its own throwaway container instead of proxying to
+// Judge0 (see git history for Judge0Client, removed). Judge0's isolate sandbox requires
+// cgroup v1 — this dev environment's Docker Desktop/WSL2 kernel refuses to provide it
+// (confirmed: forcing systemd.unified_cgroup_hierarchy=0 gets accepted onto the kernel command
+// line but /sys/fs/cgroup still mounts as cgroup2), and Judge0's own upstream docs confirm
+// cgroup v1 is a hard requirement of isolate itself, not a version-specific bug — so no Judge0
+// image swap would have fixed it either. Docker/containerd's own container isolation already
+// works fine under cgroup v2 on this machine (every other container in this stack proves that),
+// so this runner uses `<runtime> run` as the sandbox instead of isolate: shells out to the CLI
+// directly rather than adding an HTTP client or an engine API NuGet dependency, matching this
+// codebase's existing preference for simple, dependency-free approaches (e.g. bespoke test
+// fakes over a mocking library).
 //
-// Known limitation: this assumes `docker` is reachable from wherever backend-api's process
-// runs (true for the bare `dotnet run` dev setup this app currently runs in). If
-// backend-api is ever deployed as its own container again (docker-compose.yml still has
-// that service), it would need the host's Docker socket bind-mounted in to keep working —
-// a real Docker-outside-of-Docker tradeoff (host-root-equivalent access) worth a deliberate
+// Runtime-agnostic (was DockerCodeRunner, hardcoded to `docker` — renamed once it also runs
+// Podman, since keeping the old name would actively mislead the next reader): which CLI to
+// shell out to is decided once at startup by ContainerRuntimeDetector and injected as
+// IContainerCli, since Podman is drop-in compatible with every flag used here. See
+// IContainerCli's doc comment for what happens when neither runtime is available.
+//
+// Known limitation: this assumes the container CLI is reachable from wherever backend-api's
+// process runs (true for the bare `dotnet run` dev setup this app currently runs in). If
+// backend-api is ever deployed as its own container again (docker-compose.yml still has that
+// service), it would need the host's runtime socket bind-mounted in to keep working — a real
+// Docker/Podman-outside-of-itself tradeoff (host-root-equivalent access) worth a deliberate
 // decision when that day comes, not something to silently wire up here.
-public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRunner
+public sealed class ContainerCodeRunner(ILogger<ContainerCodeRunner> logger, IContainerCli containerCli) : ICodeRunner
 {
     private const string RunFileName = "__run";
 
@@ -114,6 +120,148 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         ["shell"] = new("bash:5", Compile: null, Run: entry => $"bash {Quote(entry)}"),
     };
 
+    // B2 persistent-server live preview (SDA/SEK plan): only Node.js and Python have a
+    // real "start a long-lived server" mode — every other language in Languages above is
+    // a one-shot batch Run. Per 0.4's spike, the host's published port must reach a real
+    // (non-`--network none`) network, so this mode has genuine outbound network access
+    // unlike every other execution path here — a deliberate, flagged exception (see
+    // StartPersistentAsync's own doc comment), not a silent gap.
+    private static readonly Dictionary<string, string> PersistentServerImages = new()
+    {
+        ["nodejs"] = "node:20-slim",
+        ["javascript"] = "node:20-slim",
+        ["python"] = "python:3.12-slim",
+    };
+
+    // Heroku-style convention: the student's server code is expected to read the PORT
+    // env var and bind 0.0.0.0:$PORT (e.g. Express's `app.listen(process.env.PORT)`,
+    // Flask's `app.run(host='0.0.0.0', port=int(os.environ['PORT']))`). A fixed,
+    // well-known container-side port rather than trying to detect whatever port the
+    // student's code happens to bind — code that hardcodes a different port won't be
+    // reachable through this preview; documented as a real, known limitation of this
+    // convention, not silently swallowed.
+    private const int PersistentServerContainerPort = 3000;
+
+    public sealed record PersistentRunHandle(string ContainerId, int HostPort, bool IsReady);
+
+    public async Task<PersistentRunHandle> StartPersistentAsync(
+        string entryFilePath, IReadOnlyList<CodeFileDto> files, int hostPort, CancellationToken ct = default)
+    {
+        var entryFile = files.FirstOrDefault(f => f.Path == entryFilePath)
+            ?? throw new InvalidOperationException($"Entry file '{entryFilePath}' is not one of the submitted files.");
+        if (!PersistentServerImages.TryGetValue(entryFile.Language, out var image))
+        {
+            throw new UnsupportedLanguageException(entryFile.Language);
+        }
+        if (!containerCli.IsAvailable)
+        {
+            throw new HttpRequestException("The Code Execution Service is unreachable. Try again shortly.");
+        }
+
+        var runCommand = entryFile.Language switch
+        {
+            "python" => $"python3 {Quote(entryFilePath)}",
+            _ => $"node {Quote(entryFilePath)}",
+        };
+
+        var workDir = CreateWorkDir();
+        WriteFiles(workDir, files);
+
+        var psi = new ProcessStartInfo(containerCli.ExecutableName)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        // Deliberately NOT --network none (see the class-level doc comment on
+        // PersistentServerImages) — this container needs real network I/O to be
+        // reachable via -p, which --network none/an --internal bridge cannot support
+        // (confirmed empirically in the 0.4 spike). Otherwise the same resource ceilings
+        // every other execution path here uses.
+        foreach (var arg in new[]
+        {
+            "run", "-d",
+            "--memory", "256m", "--memory-swap", "256m",
+            "--pids-limit", "256", "--cpus", "1.0",
+            "-e", $"PORT={PersistentServerContainerPort}",
+            "-p", $"127.0.0.1:{hostPort}:{PersistentServerContainerPort}",
+            "-v", $"{ToHostVisiblePath(workDir)}:/box",
+            "-w", "/box",
+            image, "sh", "-c", runCommand,
+        })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {containerCli.ExecutableName} process.");
+        var containerId = (await process.StandardOutput.ReadToEndAsync(ct)).Trim();
+        await process.WaitForExitAsync(ct);
+        if (process.ExitCode != 0)
+        {
+            var stderr = await process.StandardError.ReadToEndAsync(ct);
+            TryDeleteWorkDir(workDir);
+            throw new HttpRequestException($"The Code Execution Service is unreachable. Try again shortly. ({stderr.Trim()})");
+        }
+
+        var isReady = await WaitForPortReadyAsync(hostPort, TimeSpan.FromSeconds(15), ct);
+        return new PersistentRunHandle(containerId, hostPort, isReady);
+    }
+
+    public async Task StopPersistentAsync(string containerId, string workDir, CancellationToken ct = default)
+    {
+        if (!containerCli.IsAvailable)
+        {
+            return;
+        }
+        try
+        {
+            var psi = new ProcessStartInfo(containerCli.ExecutableName) { UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("rm");
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add(containerId);
+            using var process = Process.Start(psi);
+            if (process is not null)
+            {
+                await process.WaitForExitAsync(ct);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Best-effort — an already-gone container isn't worth failing the stop over,
+            // matching TerminalSessionService.CloseSessionAsync's own convention.
+        }
+        TryDeleteWorkDir(workDir);
+    }
+
+    // Polls with a real TCP connect attempt rather than trusting "container is running" —
+    // a Node/Flask server can be up (process started) seconds before it actually binds
+    // its port, and this is what StartPersistentAsync's caller actually needs to know
+    // before handing a previewUrl to a student.
+    private static async Task<bool> WaitForPortReadyAsync(int port, TimeSpan timeout, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        while (!cts.IsCancellationRequested)
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                await client.ConnectAsync(System.Net.IPAddress.Loopback, port, cts.Token);
+                return true;
+            }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or OperationCanceledException)
+            {
+                if (cts.IsCancellationRequested)
+                {
+                    return false;
+                }
+                await Task.Delay(300, ct);
+            }
+        }
+        return false;
+    }
+
     public async Task<CodeRunResultDto> RunAsync(
         string entryFilePath, IReadOnlyList<CodeFileDto> files, string? stdin, CancellationToken ct = default)
     {
@@ -141,6 +289,14 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             throw new UnsupportedLanguageException(entryFile.Language);
         }
 
+        // Fail fast, before touching disk, when no local runtime is available at all —
+        // same exception type/message a genuine mid-run failure below produces, so
+        // CodeExecutionController's existing mapping handles both identically.
+        if (!containerCli.IsAvailable)
+        {
+            throw new HttpRequestException("The Code Execution Service is unreachable. Try again shortly.");
+        }
+
         var workDir = CreateWorkDir();
         try
         {
@@ -165,7 +321,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         }
         catch (Exception ex) when (ex is not UnsupportedLanguageException)
         {
-            logger.LogError(ex, "Docker code execution failed for language {Language}", entryFile.Language);
+            logger.LogError(ex, "Container code execution failed for language {Language}", entryFile.Language);
             // Wrapped as HttpRequestException so CodeExecutionController's existing 503
             // mapping (originally written for a Judge0-unreachable failure) keeps handling
             // "the execution backend itself is broken" without needing a new catch clause.
@@ -205,12 +361,12 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         return "runtime_error";
     }
 
-    // Docker-outside-of-Docker: when backend-api itself runs as a container (see
-    // docker-compose.yml's backend-api service), `docker run`/`docker exec` here talk to the
-    // HOST's daemon over its bind-mounted socket — which resolves `-v` bind-mount sources
+    // Docker/Podman-outside-of-itself: when backend-api itself runs as a container (see
+    // docker-compose.yml's backend-api service), `<runtime> run`/`<runtime> exec` here talk to
+    // the HOST's daemon over its bind-mounted socket — which resolves `-v` bind-mount sources
     // against the HOST's filesystem, not this process's own container filesystem. So the
     // workdir this process writes files into (container-local) and the path string handed to
-    // `docker run -v` (must be host-visible) are two different things whenever this env var
+    // `<runtime> run -v` (must be host-visible) are two different things whenever this env var
     // is set. Unset in the bare `dotnet run` dev setup (the default today), where this
     // process's filesystem IS the host filesystem and no translation is needed. See
     // docker-compose.yml's CodeRunner__HostTempDir for the operator-supplied host-side path
@@ -233,11 +389,11 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
         return dir;
     }
 
-    // Translates a CreateWorkDir()-produced path to whatever string `docker run -v` needs to
+    // Translates a CreateWorkDir()-produced path to whatever string `<runtime> run -v` needs to
     // see it correctly on the host — itself unchanged when HostTempDirRoot isn't set (see
     // CreateWorkDir's comment). internal rather than private: TerminalSessionService builds
-    // its own `docker run -v` args directly (not through BuildDockerArgs) and needs the same
-    // translation for its workspace mount.
+    // its own `<runtime> run -v` args directly (not through BuildContainerArgs) and needs the
+    // same translation for its workspace mount.
     internal static string ToHostVisiblePath(string workDir) =>
         HostTempDirRoot is null ? workDir : $"{HostTempDirRoot.TrimEnd('/', '\\')}/{Path.GetFileName(workDir)}";
 
@@ -277,10 +433,10 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
 
     private sealed record ContainerResult(string Stdout, string Stderr, int ExitCode, bool TimedOut);
 
-    private static async Task<ContainerResult> RunContainerAsync(
+    private async Task<ContainerResult> RunContainerAsync(
         string image, string workDir, string command, string? stdin, int timeoutSeconds, int memoryMb, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("docker")
+        var psi = new ProcessStartInfo(containerCli.ExecutableName)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -288,12 +444,12 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        foreach (var arg in BuildDockerArgs(image, ToHostVisiblePath(workDir), command, timeoutSeconds, memoryMb))
+        foreach (var arg in BuildContainerArgs(image, ToHostVisiblePath(workDir), command, timeoutSeconds, memoryMb))
         {
             psi.ArgumentList.Add(arg);
         }
 
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start docker process.");
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {containerCli.ExecutableName} process.");
 
         if (!string.IsNullOrEmpty(stdin))
         {
@@ -306,7 +462,7 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
 
         // Outer safety-margin timeout on top of the in-container `timeout` command (the
         // primary enforcement — it runs inside the sandboxed process tree and reliably kills
-        // runaway submissions). This backstop only fires if the docker CLI itself hangs
+        // runaway submissions). This backstop only fires if the container CLI itself hangs
         // (e.g. daemon unresponsive), not for a normal submission timeout.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds + 10));
@@ -345,11 +501,13 @@ public sealed class DockerCodeRunner(ILogger<DockerCodeRunner> logger) : ICodeRu
     // "unsupported" backend-side without a test catching it.
     public static bool IsKnownLanguage(string language) => Languages.ContainsKey(language) || NoExecLanguages.Contains(language);
 
-    // Pure and unit-testable on their own — the actual `docker` invocation above is the
+    // Pure and unit-testable on their own — the actual container invocation above is the
     // integration seam these deliberately stay separate from, mirroring how
     // Judge0ClientTests only ever unit-tested BuildAdditionalFilesZip (a pure helper), never
-    // the live HTTP calls.
-    public static string[] BuildDockerArgs(string image, string hostWorkDir, string command, int timeoutSeconds, int memoryMb = 256) =>
+    // the live HTTP calls. Runtime-agnostic: identical args work for both `docker run` and
+    // `podman run` (see IContainerCli's doc comment) — only the executable name differs, and
+    // that's supplied separately by the caller, not part of this pure arg list.
+    public static string[] BuildContainerArgs(string image, string hostWorkDir, string command, int timeoutSeconds, int memoryMb = 256) =>
     [
         "run", "--rm", "-i",
         "--network", "none",

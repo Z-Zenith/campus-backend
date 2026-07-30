@@ -4,21 +4,24 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Services;
 
-// SEK-01: real end-to-end coverage for DockerCodeRunner.RunAsync — every other test in this
-// suite (DockerCodeRunnerTests, CodeExecutionControllerTests) deliberately stays off the live
+// SEK-01: real end-to-end coverage for ContainerCodeRunner.RunAsync — every other test in this
+// suite (ContainerCodeRunnerTests, CodeExecutionControllerTests) deliberately stays off the live
 // `docker run` path, so nothing previously exercised any language's actual Compile/Run command
 // against a real Docker daemon. These tests do exactly that: one real submission per language,
 // asserting it actually compiles and executes and produces the expected output — not just that
-// the docker-args shape looks right.
+// the container-args shape looks right.
 //
 // Gated behind RUN_DOCKER_INTEGRATION_TESTS=1 (see DockerTheoryAttribute below) so a normal
 // `dotnet test` without a Docker daemon still passes/skips cleanly, matching this suite's
-// existing choice not to require one by default. Run with:
-//   RUN_DOCKER_INTEGRATION_TESTS=1 dotnet test --filter FullyQualifiedName~DockerCodeRunnerIntegrationTests
+// existing choice not to require one by default. Runs specifically against Docker (not the
+// runtime-detection path) since that's what CI/dev machines running this suite are assumed to
+// have — Podman-specific behavior is 0.5's own port-forwarding/networking spike's concern, not
+// this suite's. Run with:
+//   RUN_DOCKER_INTEGRATION_TESTS=1 dotnet test --filter FullyQualifiedName~ContainerCodeRunnerIntegrationTests
 // after `docker/setup-code-images.sh` has pulled/built every image these languages need.
-public class DockerCodeRunnerIntegrationTests
+public class ContainerCodeRunnerIntegrationTests
 {
-    private static DockerCodeRunner NewRunner() => new(NullLogger<DockerCodeRunner>.Instance);
+    private static ContainerCodeRunner NewRunner() => new(NullLogger<ContainerCodeRunner>.Instance, new DockerCli());
 
     [DockerTheory]
     [MemberData(nameof(ExecutableLanguageCases))]

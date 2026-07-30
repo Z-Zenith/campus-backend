@@ -14,12 +14,15 @@ namespace BackendApi.Services;
 // compilers, git, ls/cd, one-off scripts. Matches OutputPanel.tsx's own "NOT a live
 // interactive terminal" scope line for Run, applied the same way here.
 //
-// Also --network none, same as DockerCodeRunner's Run: a persistent, network-enabled
+// Also --network none, same as ContainerCodeRunner's Run: a persistent, network-enabled
 // shell is a materially bigger security surface (arbitrary outbound connections,
 // git clone/pip install/curl all becoming exfiltration or supply-chain vectors) than a
 // throwaway one-shot sandboxed Run. Network access would be a separate, explicit,
 // reviewed decision, not something to bundle in silently.
-public sealed class TerminalSessionService(ILogger<TerminalSessionService> logger)
+//
+// Runtime-agnostic like ContainerCodeRunner: shells out via IContainerCli rather than a
+// hardcoded `docker`, so this also works on a machine that only has Podman installed.
+public sealed class TerminalSessionService(ILogger<TerminalSessionService> logger, IContainerCli containerCli)
 {
     private const string Image = "campus-dev-terminal:local";
     private const int ExecTimeoutSeconds = 30;
@@ -36,8 +39,13 @@ public sealed class TerminalSessionService(ILogger<TerminalSessionService> logge
 
     public async Task<Guid> StartAsync(IReadOnlyList<CodeFileDto> files, CancellationToken ct = default)
     {
-        var workDir = DockerCodeRunner.CreateWorkDir();
-        DockerCodeRunner.WriteFiles(workDir, files);
+        if (!containerCli.IsAvailable)
+        {
+            throw new HttpRequestException("The Code Execution Service is unreachable. Try again shortly.");
+        }
+
+        var workDir = ContainerCodeRunner.CreateWorkDir();
+        ContainerCodeRunner.WriteFiles(workDir, files);
 
         var containerId = await RunAsync(
             [
@@ -47,7 +55,7 @@ public sealed class TerminalSessionService(ILogger<TerminalSessionService> logge
                 "--memory-swap", "512m",
                 "--pids-limit", "128",
                 "--cpus", "1.0",
-                "-v", $"{DockerCodeRunner.ToHostVisiblePath(workDir)}:/box",
+                "-v", $"{ContainerCodeRunner.ToHostVisiblePath(workDir)}:/box",
                 "-w", "/box",
                 Image,
                 "tail", "-f", "/dev/null",
@@ -115,14 +123,14 @@ public sealed class TerminalSessionService(ILogger<TerminalSessionService> logge
             // worth failing the close/reap over.
             logger.LogWarning(ex, "Failed to remove terminal container {ContainerId}", session.ContainerId);
         }
-        DockerCodeRunner.TryDeleteWorkDir(session.WorkspaceDir);
+        ContainerCodeRunner.TryDeleteWorkDir(session.WorkspaceDir);
     }
 
     private sealed record ProcessResult(string Stdout, string Stderr, int ExitCode);
 
-    private static async Task<ProcessResult> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
+    private async Task<ProcessResult> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("docker")
+        var psi = new ProcessStartInfo(containerCli.ExecutableName)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

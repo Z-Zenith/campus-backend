@@ -25,6 +25,9 @@ public partial class College
     public DateTime CreatedAt { get; set; }
 
     [InverseProperty("College")]
+    public virtual ICollection<BlockedSite> BlockedSites { get; set; } = new List<BlockedSite>();
+
+    [InverseProperty("College")]
     public virtual ICollection<Department> Departments { get; set; } = new List<Department>();
 
     [InverseProperty("College")]
@@ -32,6 +35,12 @@ public partial class College
 
     [InverseProperty("College")]
     public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
+
+    [InverseProperty("College")]
+    public virtual ICollection<SiteClassificationCache> SiteClassificationCaches { get; set; } = new List<SiteClassificationCache>();
+
+    [InverseProperty("College")]
+    public virtual ICollection<SiteClassificationFeedback> SiteClassificationFeedbacks { get; set; } = new List<SiteClassificationFeedback>();
 
     [InverseProperty("College")]
     public virtual ICollection<User> Users { get; set; } = new List<User>();

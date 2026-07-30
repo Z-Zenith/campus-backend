@@ -50,6 +50,9 @@ public partial class User
     [InverseProperty("Student")]
     public virtual ICollection<AttendanceRecord> AttendanceRecordStudents { get; set; } = new List<AttendanceRecord>();
 
+    [InverseProperty("BlockedByNavigation")]
+    public virtual ICollection<BlockedSite> BlockedSiteBlockedByNavigations { get; set; } = new List<BlockedSite>();
+
     [InverseProperty("Student")]
     public virtual ICollection<BrowsingHistory> BrowsingHistories { get; set; } = new List<BrowsingHistory>();
 
@@ -196,6 +199,9 @@ public partial class User
     // relies on iterating every active session for a user.
     [InverseProperty("User")]
     public virtual ICollection<UserSession> UserSessions { get; set; } = new List<UserSession>();
+
+    [InverseProperty("Student")]
+    public virtual ICollection<SiteClassificationFeedback> SiteClassificationFeedbacks { get; set; } = new List<SiteClassificationFeedback>();
 
     [InverseProperty("RequestedByNavigation")]
     public virtual ICollection<WhitelistRequest> WhitelistRequestRequestedByNavigations { get; set; } = new List<WhitelistRequest>();

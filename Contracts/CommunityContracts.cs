@@ -18,3 +18,10 @@ public record MaterialDto(Guid Id, string Title, string FileUrl, Guid? SubjectId
 
 // API-02
 public record ProvisionClassGroupsResponse(int GroupsCreated, int MembershipsAdded);
+
+// Phase 6 - group membership management. Genuinely unscoped before this: AWA-06/AWA-12
+// covered create + read-only list, but nothing let a caller see, add to, or remove from a
+// group's membership after creation.
+public record GroupMemberDto(Guid Id, Guid UserId, string UserFullName, DateTime JoinedAt);
+
+public record AddGroupMemberRequest(Guid UserId);

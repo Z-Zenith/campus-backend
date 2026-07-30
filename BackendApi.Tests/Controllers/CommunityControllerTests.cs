@@ -585,4 +585,180 @@ public class CommunityControllerTests
         Assert.Equal(0, response.MembershipsAdded);
         Assert.False(await db.Groups.AnyAsync(g => g.SectionId == otherSection.Id));
     }
+
+    // Phase 6 - group membership management.
+    [Fact]
+    public async Task ListMembers_ForbidsCallerWhoIsNotAMember()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var outsider = NewUser(AccountType.Teacher, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.Add(outsider);
+        db.Groups.Add(group);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, outsider);
+        var result = await controller.ListMembers(group.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListMembers_ReturnsMembersForGroupCallerBelongsTo()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var member = NewUser(AccountType.Teacher, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.Add(member);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = member.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, member);
+        var result = await controller.ListMembers(group.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var members = Assert.IsType<List<GroupMemberDto>>(ok.Value);
+        var dto = Assert.Single(members);
+        Assert.Equal(member.Id, dto.UserId);
+    }
+
+    [Fact]
+    public async Task AddMember_ForbidsCallerWhoIsNotAMember()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var outsider = NewUser(AccountType.Teacher, collegeId);
+        var newMember = NewUser(AccountType.Student, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.AddRange(outsider, newMember);
+        db.Groups.Add(group);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, outsider);
+        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddMember_RejectsClassTypeGroup()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var newMember = NewUser(AccountType.Student, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "1st Year CSE - A", Type = GroupType.Class };
+        db.Users.AddRange(caller, newMember);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddMember_RejectsUserFromADifferentCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var otherCollegeUser = NewUser(AccountType.Student, Guid.NewGuid());
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.AddRange(caller, otherCollegeUser);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(otherCollegeUser.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddMember_RejectsDuplicateMembership()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var existingMember = NewUser(AccountType.Student, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.AddRange(caller, existingMember);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = existingMember.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(existingMember.Id));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddMember_AddsMemberToGroup()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var newMember = new User { Id = Guid.NewGuid(), CollegeId = collegeId, Identifier = "s1", PasswordHash = "hash", FullName = "New Student", AccountType = AccountType.Student, IsActive = true };
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.AddRange(caller, newMember);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddMember(group.Id, new AddGroupMemberRequest(newMember.Id));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<GroupMemberDto>(ok.Value);
+        Assert.Equal("New Student", dto.UserFullName);
+    }
+
+    [Fact]
+    public async Task RemoveMember_RejectsClassTypeGroup()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "1st Year CSE - A", Type = GroupType.Class };
+        db.Users.Add(caller);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.RemoveMember(group.Id, caller.Id);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task RemoveMember_RemovesMembership()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var caller = NewUser(AccountType.Teacher, collegeId);
+        var otherMember = NewUser(AccountType.Student, collegeId);
+        var group = new Group { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "Chess Club", Type = GroupType.Club };
+        db.Users.AddRange(caller, otherMember);
+        db.Groups.Add(group);
+        db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = caller.Id, JoinedAt = DateTime.UtcNow });
+        var membership = new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, UserId = otherMember.Id, JoinedAt = DateTime.UtcNow };
+        db.GroupMembers.Add(membership);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.RemoveMember(group.Id, otherMember.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.DoesNotContain(db.GroupMembers.Local, m => m.Id == membership.Id);
+    }
 }

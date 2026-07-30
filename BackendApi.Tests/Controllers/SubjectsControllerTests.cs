@@ -410,4 +410,151 @@ public class SubjectsControllerTests
         Assert.IsType<NoContentResult>(result);
         Assert.DoesNotContain(db.Subjects.Local, s => s.Id == subject.Id);
     }
+
+    [Fact]
+    public async Task AddTeacher_ForbidsCallerWithoutManageDepartmentsPermission()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddTeacher(subject.Id, new AddSubjectTeacherRequest(teacher.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddTeacher_RejectsTeacherFromADifferentCollege()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var otherCollegeTeacher = NewUser(AccountType.Teacher);
+        db.Users.AddRange(caller, otherCollegeTeacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddTeacher(subject.Id, new AddSubjectTeacherRequest(otherCollegeTeacher.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddTeacher_RejectsDuplicateRosterEntry()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddTeacher(subject.Id, new AddSubjectTeacherRequest(teacher.Id));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task AddTeacher_AddsTeacherToRoster()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.AddTeacher(subject.Id, new AddSubjectTeacherRequest(teacher.Id));
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var dto = Assert.IsType<SubjectTeacherDto>(created.Value);
+        Assert.Equal(teacher.Id, dto.TeacherId);
+        Assert.Equal("Teacher One", dto.TeacherName);
+    }
+
+    [Fact]
+    public async Task ListTeachers_ReturnsRosterForSubject()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.ListTeachers(subject.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var roster = Assert.IsType<List<SubjectTeacherDto>>(ok.Value);
+        var entry = Assert.Single(roster);
+        Assert.Equal(teacher.Id, entry.TeacherId);
+    }
+
+    [Fact]
+    public async Task RemoveTeacher_RejectsWhenTeacherHasActiveSectionAssignment()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 1, Name = "A" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        db.TeacherSectionAssignments.Add(new TeacherSectionAssignment { Id = Guid.NewGuid(), TeacherId = teacher.Id, SectionId = section.Id, SubjectId = subject.Id });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.RemoveTeacher(subject.Id, teacher.Id);
+
+        Assert.IsType<ConflictObjectResult>(result);
+    }
+
+    [Fact]
+    public async Task RemoveTeacher_RemovesUnassignedTeacherFromRoster()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = new User { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Teacher One", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(caller, teacher);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.SubjectTeachers.Add(new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id });
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var result = await controller.RemoveTeacher(subject.Id, teacher.Id);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.DoesNotContain(db.SubjectTeachers.Local, st => st.SubjectId == subject.Id && st.TeacherId == teacher.Id);
+    }
 }

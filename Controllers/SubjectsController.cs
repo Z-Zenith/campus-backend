@@ -193,6 +193,117 @@ public class SubjectsController(AppDbContext db, IPermissionService permissions,
         return NoContent();
     }
 
+    // Stable teacher roster (subject_teachers) - "who teaches this subject," decided once
+    // and rarely changed. See TimetableController's teacher-section-assignment endpoints for
+    // the per-semester rotation that draws from this roster.
+    [HttpGet("{id}/teachers")]
+    public async Task<ActionResult<List<SubjectTeacherDto>>> ListTeachers(Guid id)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        var subject = await db.Subjects.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == id);
+        if (subject is null)
+        {
+            return NotFound();
+        }
+        if (!await collegeScope.IsSameCollegeAsync(userId, subject.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var roster = await db.SubjectTeachers
+            .Include(st => st.Teacher)
+            .Where(st => st.SubjectId == id)
+            .OrderBy(st => st.Teacher.FullName)
+            .Select(st => new SubjectTeacherDto(st.Id, st.SubjectId, st.TeacherId, st.Teacher.FullName))
+            .ToListAsync();
+        return Ok(roster);
+    }
+
+    [HttpPost("{id}/teachers")]
+    public async Task<ActionResult<SubjectTeacherDto>> AddTeacher(Guid id, AddSubjectTeacherRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        var subject = await db.Subjects.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == id);
+        if (subject is null)
+        {
+            return NotFound();
+        }
+        if (!await collegeScope.IsSameCollegeAsync(userId, subject.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var teacher = await db.Users.FindAsync(request.TeacherId);
+        if (teacher is null || teacher.AccountType != AccountType.Teacher)
+        {
+            return BadRequest("TeacherId must belong to an existing Teacher account.");
+        }
+        if (teacher.CollegeId != subject.Department.CollegeId)
+        {
+            return BadRequest("The teacher must belong to the subject's college.");
+        }
+        if (await db.SubjectTeachers.AnyAsync(st => st.SubjectId == id && st.TeacherId == request.TeacherId))
+        {
+            return Conflict("This teacher is already on the subject's roster.");
+        }
+
+        var entry = new SubjectTeacher { Id = Guid.NewGuid(), SubjectId = id, TeacherId = request.TeacherId };
+        db.SubjectTeachers.Add(entry);
+        await db.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(ListTeachers), new { id }, new SubjectTeacherDto(entry.Id, id, teacher.Id, teacher.FullName));
+    }
+
+    // Blocked if the teacher currently holds a live TeacherSectionAssignment for this subject
+    // (same "check dependents before removing" pattern as Subject.Delete above) - a section's
+    // current-semester assignment must be removed first, rather than silently orphaning it.
+    [HttpDelete("{id}/teachers/{teacherId}")]
+    public async Task<IActionResult> RemoveTeacher(Guid id, Guid teacherId)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        var subject = await db.Subjects.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == id);
+        if (subject is null)
+        {
+            return NotFound();
+        }
+        if (!await collegeScope.IsSameCollegeAsync(userId, subject.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var entry = await db.SubjectTeachers.FirstOrDefaultAsync(st => st.SubjectId == id && st.TeacherId == teacherId);
+        if (entry is null)
+        {
+            return NotFound();
+        }
+
+        var hasActiveAssignment = await db.TeacherSectionAssignments
+            .AnyAsync(a => a.SubjectId == id && a.TeacherId == teacherId);
+        if (hasActiveAssignment)
+        {
+            return Conflict("This teacher currently has a section assignment for this subject and cannot be removed from the roster until that's reassigned.");
+        }
+
+        db.SubjectTeachers.Remove(entry);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
     private async Task<ObjectResult?> ValidateCoordinatorAsync(Guid coordinatorId, Guid departmentCollegeId)
     {
         var coordinator = await db.Users.FindAsync(coordinatorId);

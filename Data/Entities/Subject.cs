@@ -42,6 +42,9 @@ public partial class Subject
     [InverseProperty("Subject")]
     public virtual ICollection<Material> Materials { get; set; } = new List<Material>();
 
+    [InverseProperty("Subject")]
+    public virtual ICollection<SubjectTeacher> SubjectTeachers { get; set; } = new List<SubjectTeacher>();
+
     [ForeignKey("TeacherId")]
     [InverseProperty("Subjects")]
     public virtual User? Teacher { get; set; }

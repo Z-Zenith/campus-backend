@@ -90,6 +90,8 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<Subject> Subjects { get; set; }
 
+    public virtual DbSet<SubjectTeacher> SubjectTeachers { get; set; }
+
     public virtual DbSet<Submission> Submissions { get; set; }
 
     public virtual DbSet<SuspiciousFlag> SuspiciousFlags { get; set; }
@@ -629,6 +631,17 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.Teacher).WithMany(p => p.Subjects)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("subjects_teacher_id_fkey");
+        });
+
+        modelBuilder.Entity<SubjectTeacher>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("subject_teachers_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+
+            entity.HasOne(d => d.Subject).WithMany(p => p.SubjectTeachers).HasConstraintName("subject_teachers_subject_id_fkey");
+
+            entity.HasOne(d => d.Teacher).WithMany(p => p.SubjectTeachers).HasConstraintName("subject_teachers_teacher_id_fkey");
         });
 
         modelBuilder.Entity<Submission>(entity =>

@@ -168,6 +168,18 @@ CREATE TABLE IF NOT EXISTS subjects (
     UNIQUE (department_id, code)
 );
 
+-- Stable roster of teachers who teach a subject, decided once and rarely changed -
+-- distinct from teacher_section_assignments below, which rotates every semester.
+-- subjects.teacher_id (the coordinator) is a separate administrative role and is not
+-- required to be a member of this roster.
+CREATE TABLE IF NOT EXISTS subject_teachers (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    teacher_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE (subject_id, teacher_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subject_teachers_teacher ON subject_teachers (teacher_id);
+
 CREATE TABLE IF NOT EXISTS sections (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     department_id uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,

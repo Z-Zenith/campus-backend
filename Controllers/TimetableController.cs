@@ -244,6 +244,132 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         return Ok(ToDto(slot));
     }
 
+    // Admin CRUD for the per-semester teacher/section rotation (teacher_section_assignments)
+    // - previously had no production endpoint at all anywhere in this codebase (every
+    // reference outside entity/DTO plumbing was test-seed-only). Distinct from
+    // subjects/{id}/teachers (SubjectsController) which is the stable, decided-once roster;
+    // Create below only allows assigning a teacher already on that roster.
+    [HttpGet("timetable/sections/{sectionId}/teacher-assignments")]
+    public async Task<ActionResult<List<TeacherSectionAssignmentDto>>> ListTeacherAssignments(Guid sectionId)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_timetable"))
+        {
+            return Forbid();
+        }
+
+        var section = await db.Sections.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == sectionId);
+        if (section is null)
+        {
+            return NotFound();
+        }
+        if (!await IsInScopeAsync(userId, section.DepartmentId, section.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var assignments = await db.TeacherSectionAssignments
+            .Include(a => a.Subject)
+            .Include(a => a.Teacher)
+            .Where(a => a.SectionId == sectionId)
+            .OrderBy(a => a.Subject.Code)
+            .Select(a => new TeacherSectionAssignmentDto(a.Id, a.SectionId, a.SubjectId, a.Subject.Code, a.Subject.Name, a.TeacherId, a.Teacher.FullName))
+            .ToListAsync();
+        return Ok(assignments);
+    }
+
+    [HttpPost("timetable/sections/{sectionId}/teacher-assignments")]
+    public async Task<ActionResult<TeacherSectionAssignmentDto>> CreateTeacherAssignment(Guid sectionId, CreateTeacherSectionAssignmentRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_timetable"))
+        {
+            return Forbid();
+        }
+
+        var section = await db.Sections.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == sectionId);
+        if (section is null)
+        {
+            return NotFound();
+        }
+        if (!await IsInScopeAsync(userId, section.DepartmentId, section.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var subject = await db.Subjects.FirstOrDefaultAsync(s => s.Id == request.SubjectId);
+        if (subject is null || subject.DepartmentId != section.DepartmentId)
+        {
+            return BadRequest("SubjectId must belong to the same department as the section.");
+        }
+
+        // Core of "remodel the arch this way": a teacher can only be assigned to teach a
+        // subject in a section for this rotation if they're already on that subject's stable
+        // roster (subjects/{id}/teachers) - the roster is decided once, this assignment is
+        // what changes every semester.
+        var onRoster = await db.SubjectTeachers.AnyAsync(st => st.SubjectId == request.SubjectId && st.TeacherId == request.TeacherId);
+        if (!onRoster)
+        {
+            return BadRequest("This teacher is not on the subject's teacher roster. Add them to the roster first.");
+        }
+
+        if (await db.TeacherSectionAssignments.AnyAsync(a => a.SectionId == sectionId && a.SubjectId == request.SubjectId && a.TeacherId == request.TeacherId))
+        {
+            return Conflict("This teacher is already assigned to this subject for this section.");
+        }
+
+        var teacher = await db.Users.FindAsync(request.TeacherId);
+        var assignment = new TeacherSectionAssignment { Id = Guid.NewGuid(), SectionId = sectionId, SubjectId = request.SubjectId, TeacherId = request.TeacherId };
+        db.TeacherSectionAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(ListTeacherAssignments), new { sectionId },
+            new TeacherSectionAssignmentDto(assignment.Id, sectionId, subject.Id, subject.Code, subject.Name, request.TeacherId, teacher!.FullName));
+    }
+
+    [HttpDelete("timetable/sections/{sectionId}/teacher-assignments/{assignmentId}")]
+    public async Task<IActionResult> DeleteTeacherAssignment(Guid sectionId, Guid assignmentId)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_timetable"))
+        {
+            return Forbid();
+        }
+
+        var section = await db.Sections.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == sectionId);
+        if (section is null)
+        {
+            return NotFound();
+        }
+        if (!await IsInScopeAsync(userId, section.DepartmentId, section.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var assignment = await db.TeacherSectionAssignments.FirstOrDefaultAsync(a => a.Id == assignmentId && a.SectionId == sectionId);
+        if (assignment is null)
+        {
+            return NotFound();
+        }
+
+        db.TeacherSectionAssignments.Remove(assignment);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // Same department-scope-or-caller's-college clamp as PatchSlot above (#129-class check) -
+    // factored out here since three new endpoints need it identically.
+    private async Task<bool> IsInScopeAsync(Guid userId, Guid targetDepartmentId, Guid targetCollegeId)
+    {
+        var departmentScope = await permissions.GetDepartmentScopeAsync(userId);
+        if (departmentScope is not null)
+        {
+            return targetDepartmentId == departmentScope;
+        }
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+        return targetCollegeId == callerCollegeId;
+    }
+
     // TWA-10
     [HttpGet("timetable/mine")]
     public async Task<ActionResult<List<TimetableSlotDto>>> Mine()

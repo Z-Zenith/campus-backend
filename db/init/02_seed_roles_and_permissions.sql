@@ -3,17 +3,24 @@
 -- ("Full permission catalog" table) and the default-holder assignments per
 -- code. Do not add/rename/reassign anything here without updating Section 9
 -- first (docs/Schema.md's explicit anti-drift instruction).
--- Roles themselves (lecturer, hod, finance, it, admin) are fixed by the schema.
+-- Roles themselves (lecturer, hod, finance, it, admin, class_teacher) are fixed by the schema.
+--
+-- class_teacher + view_section_oversight below are NEW as of this change (full
+-- section-oversight for class teachers - attendance/marks across every period/subject
+-- of their assigned section, not just what they personally teach). Per the anti-drift
+-- rule above, this seed entry is only valid once Section 9 names both — flagged in the
+-- PR as pending that doc update, not merged as pre-approved.
 
 BEGIN;
 
 -- Roles
 INSERT INTO roles (code, default_scope_kind) VALUES
-    ('lecturer', 'department'),
-    ('hod',      'department'),
-    ('finance',  'global'),
-    ('it',       'global'),
-    ('admin',    'global')
+    ('lecturer',     'department'),
+    ('hod',          'department'),
+    ('finance',      'global'),
+    ('it',           'global'),
+    ('admin',        'global'),
+    ('class_teacher','section')
 ON CONFLICT (code) DO NOTHING;
 
 -- Permission catalog — the full list from architecture doc Section 9.
@@ -34,7 +41,8 @@ INSERT INTO permissions (code, description) VALUES
     ('view_all_student_records',     'View all student records (AWA-07)'),
     ('view_all_student_performance', 'View all student performance (AWA-08)'),
     ('view_all_groups',              'View all community groups (TWA-05, AWA-06)'),
-    ('view_department_reports',      'View department-level reports')
+    ('view_department_reports',      'View department-level reports'),
+    ('view_section_oversight',       'Full attendance/marks oversight for a class teacher''s assigned section, across every period and subject, not just what the holder personally teaches')
 ON CONFLICT (code) DO NOTHING;
 
 -- Default permission bundles per role, per Section 9's "Default holders" column.
@@ -56,6 +64,17 @@ WHERE code IN (
     'add_internal_marks',
     'view_all_groups',
     'create_timetable', 'approve_external_marks', 'view_department_reports'
+)
+ON CONFLICT DO NOTHING;
+
+-- Class teacher: section-scoped oversight only - deliberately not lecturer's
+-- create_group/create_event/add_internal_marks bundle, since a class teacher may not
+-- personally teach the section at all (oversight is a distinct duty, not a superset of
+-- teaching one subject to it).
+INSERT INTO role_default_permissions (role_code, permission_code)
+SELECT 'class_teacher', code FROM permissions
+WHERE code IN (
+    'view_section_oversight'
 )
 ON CONFLICT DO NOTHING;
 

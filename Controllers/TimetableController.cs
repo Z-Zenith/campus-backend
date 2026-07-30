@@ -460,7 +460,10 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
     }
 
     // TWA-08 — roster for the attendance-marking form; scoped the same way as marking
-    // itself, so a teacher can only see the section they're assigned to teach this slot.
+    // itself, so a teacher can only see the section they're assigned to teach this slot -
+    // OR, per the class_teacher role, a caller with section-oversight scope for this
+    // slot's section (they may not teach this particular period at all, but hold full
+    // attendance/marks oversight for the section across every period).
     [HttpGet("timetable/slots/{id}/roster")]
     public async Task<ActionResult<List<RosterStudentDto>>> Roster(Guid id)
     {
@@ -471,7 +474,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         {
             return NotFound();
         }
-        if (slot.TeacherId != userId)
+        if (slot.TeacherId != userId && await permissions.GetSectionOversightScopeAsync(userId) != slot.SectionId)
         {
             return Forbid();
         }
@@ -535,17 +538,28 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
     // and internal marks (TWA-16) no older than the last write to either — both are read
     // live here, not cached, so there is no separate "last sync" to go stale. Same
     // TeacherSectionAssignment scoping as TWA-12: the caller must actually teach this
-    // section for at least one subject.
+    // section for at least one subject - OR hold class_teacher section-oversight scope
+    // for it, in which case every subject taught to the section (by any teacher) is
+    // covered, not just the caller's own. Known, disclosed gap: still internal marks
+    // only (TWA-16) - external marks (TWA-17/20) aren't in SectionPerformanceSummaryDto's
+    // shape yet; adding those is a separate contract change, not folded in here.
     [HttpGet("timetable/sections/{sectionId}/performance-summary")]
     public async Task<ActionResult<SectionPerformanceSummaryDto>> GetSectionPerformanceSummary(Guid sectionId)
     {
         var userId = CurrentUserId();
 
-        var taughtSubjectIds = await db.TeacherSectionAssignments
-            .Where(a => a.TeacherId == userId && a.SectionId == sectionId)
-            .Select(a => a.SubjectId)
-            .ToListAsync();
-        if (taughtSubjectIds.Count == 0)
+        var hasSectionOversight = await permissions.GetSectionOversightScopeAsync(userId) == sectionId;
+        var subjectIds = hasSectionOversight
+            ? await db.TeacherSectionAssignments
+                .Where(a => a.SectionId == sectionId)
+                .Select(a => a.SubjectId)
+                .Distinct()
+                .ToListAsync()
+            : await db.TeacherSectionAssignments
+                .Where(a => a.TeacherId == userId && a.SectionId == sectionId)
+                .Select(a => a.SubjectId)
+                .ToListAsync();
+        if (subjectIds.Count == 0)
         {
             return Forbid();
         }
@@ -581,7 +595,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
             : 100m * attendanceRecords.Count(r => r.Status == AttendanceStatus.Present) / attendanceRecords.Count;
 
         var marksBySubject = new List<SubjectMarksSummaryDto>();
-        foreach (var subjectId in taughtSubjectIds)
+        foreach (var subjectId in subjectIds)
         {
             var subject = await db.Subjects.FindAsync(subjectId);
             if (subject is null)
@@ -657,8 +671,11 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         }
 
         // Scoped to the teacher's own assigned section: only the teacher timetabled for
-        // this slot may mark attendance for its sessions.
-        if (slot.TeacherId != userId)
+        // this slot may mark attendance for its sessions - OR a class_teacher holding
+        // section-oversight scope for it (full oversight includes acting on behalf of the
+        // section, not just viewing - same reasoning as Roster above, which is this
+        // endpoint's own pre-marking form).
+        if (slot.TeacherId != userId && await permissions.GetSectionOversightScopeAsync(userId) != slot.SectionId)
         {
             return Forbid();
         }

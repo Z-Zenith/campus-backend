@@ -649,6 +649,10 @@ public partial class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("role_bindings_department_id_fkey");
 
+            entity.HasOne(d => d.Section).WithMany(p => p.RoleBindings)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("role_bindings_section_id_fkey");
+
             entity.HasOne(d => d.RoleCodeNavigation).WithMany(p => p.RoleBindings)
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("role_bindings_role_code_fkey");

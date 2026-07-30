@@ -34,6 +34,9 @@ public partial class Section
     public virtual ICollection<Group> Groups { get; set; } = new List<Group>();
 
     [InverseProperty("Section")]
+    public virtual ICollection<RoleBinding> RoleBindings { get; set; } = new List<RoleBinding>();
+
+    [InverseProperty("Section")]
     public virtual ICollection<SectionEnrollment> SectionEnrollments { get; set; } = new List<SectionEnrollment>();
 
     [InverseProperty("Section")]

@@ -16,18 +16,21 @@ public class ExamSchedulesControllerTests
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     private class DenyingPermissionService : IPermissionService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     private class DepartmentScopedPermissionService(Guid departmentId) : IPermissionService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(departmentId);
+        public Task<Guid?> GetSectionOversightScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
     }
 
     private static AppDbContext NewDb() => new(

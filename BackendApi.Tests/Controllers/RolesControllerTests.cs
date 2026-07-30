@@ -47,11 +47,14 @@ public class RolesControllerTests
     {
         var manageRolesPermission = new Permission { Code = "manage_roles_and_permissions", Description = "x" };
         var createTimetablePermission = new Permission { Code = "create_timetable", Description = "x" };
+        var viewSectionOversightPermission = new Permission { Code = "view_section_oversight", Description = "x" };
         var admin = new Role { Code = "admin" };
         admin.PermissionCodes.Add(manageRolesPermission);
         var lecturer = new Role { Code = "lecturer" };
-        db.Roles.AddRange(admin, lecturer);
-        db.Permissions.AddRange(manageRolesPermission, createTimetablePermission);
+        var classTeacher = new Role { Code = "class_teacher" };
+        classTeacher.PermissionCodes.Add(viewSectionOversightPermission);
+        db.Roles.AddRange(admin, lecturer, classTeacher);
+        db.Permissions.AddRange(manageRolesPermission, createTimetablePermission, viewSectionOversightPermission);
         await db.SaveChangesAsync();
     }
 
@@ -234,5 +237,95 @@ public class RolesControllerTests
         var result = await controller.AssignHod(department.Id, new AssignHodRequest(candidate.Id));
 
         Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // Phase 9 - class_teacher section-scoped role bindings.
+    private static async Task<(User Admin, College College, Department Department, Section Section)> SeedAdminWithSectionAsync(AppDbContext db)
+    {
+        await SeedRolesAndPermissionsAsync(db);
+        var admin = NewUser();
+        var college = new College { Id = admin.CollegeId, Name = "Test College" };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = college.Id, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 3, Name = "A" };
+        db.Users.Add(admin);
+        db.Colleges.Add(college);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        return (admin, college, department, section);
+    }
+
+    [Fact]
+    public async Task CreateRoleBinding_RejectsSectionScopeWithoutSectionId()
+    {
+        await using var db = NewDb();
+        var (admin, _, _, _) = await SeedAdminWithSectionAsync(db);
+        var target = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Target", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.Add(target);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(target.Id, "class_teacher", ScopeKind.Section, null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateRoleBinding_RejectsCrossCollegeSection()
+    {
+        await using var db = NewDb();
+        var (admin, _, _, _) = await SeedAdminWithSectionAsync(db);
+        var otherCollege = new College { Id = Guid.NewGuid(), Name = "Other College" };
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = otherCollege.Id, Name = "EE" };
+        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Year = 1, Name = "B" };
+        var target = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Target", AccountType = AccountType.Teacher, IsActive = true };
+        db.Colleges.Add(otherCollege);
+        db.Departments.Add(otherDepartment);
+        db.Sections.Add(otherSection);
+        db.Users.Add(target);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(target.Id, "class_teacher", ScopeKind.Section, null, otherSection.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateRoleBinding_CreatesSectionScopedClassTeacherBinding()
+    {
+        await using var db = NewDb();
+        var (admin, _, _, section) = await SeedAdminWithSectionAsync(db);
+        var target = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "Target", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.Add(target);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(target.Id, "class_teacher", ScopeKind.Section, null, section.Id));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<RoleBindingDto>(ok.Value);
+        Assert.Equal(section.Id, dto.SectionId);
+        Assert.Null(dto.DepartmentId);
+    }
+
+    [Fact]
+    public async Task CreateRoleBinding_RejectsThirdClassTeacherForSameSection()
+    {
+        await using var db = NewDb();
+        var (admin, _, _, section) = await SeedAdminWithSectionAsync(db);
+        var firstTeacher = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t1", PasswordHash = "hash", FullName = "First", AccountType = AccountType.Teacher, IsActive = true };
+        var secondTeacher = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t2", PasswordHash = "hash", FullName = "Second", AccountType = AccountType.Teacher, IsActive = true };
+        var thirdTeacher = new User { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Identifier = "t3", PasswordHash = "hash", FullName = "Third", AccountType = AccountType.Teacher, IsActive = true };
+        db.Users.AddRange(firstTeacher, secondTeacher, thirdTeacher);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = firstTeacher.Id, RoleCode = "class_teacher", ScopeType = ScopeKind.Section, SectionId = section.Id, GrantedAt = DateTime.UtcNow });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = secondTeacher.Id, RoleCode = "class_teacher", ScopeType = ScopeKind.Section, SectionId = section.Id, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(thirdTeacher.Id, "class_teacher", ScopeKind.Section, null, section.Id));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
     }
 }

@@ -2,7 +2,7 @@ namespace BackendApi.Data.Entities;
 
 public enum AccountType { Student, Teacher, AdminTier, Parent }
 
-public enum ScopeKind { Global, Department }
+public enum ScopeKind { Global, Department, Section }
 
 public enum AttendanceStatus { Present, Absent, Late }
 

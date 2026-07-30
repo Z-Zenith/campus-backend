@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS subject_teachers (
     teacher_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE (subject_id, teacher_id)
 );
+CREATE INDEX IF NOT EXISTS idx_subject_teachers_teacher ON subject_teachers (teacher_id);
 
 CREATE TABLE IF NOT EXISTS sections (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -100,28 +100,39 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
             return Ok(new List<AssignmentSummaryDto>());
         }
 
-        var subjectIds = await db.TeacherSectionAssignments
-            .Where(a => a.SectionId == sectionId)
-            .Select(a => a.SubjectId)
-            .Distinct()
+        // Previously 3 sequential round trips (subjectIds, then assignments, then
+        // mySubmissions, joined in memory) -- collapsed into one query. "Teaches this
+        // section+subject" and "my submission for this assignment" are both expressed as
+        // correlated subqueries rather than a separate round trip + in-memory join.
+        var rows = await db.Assignments
+            .Where(a => db.TeacherSectionAssignments
+                .Any(tsa => tsa.SectionId == sectionId && tsa.SubjectId == a.SubjectId))
+            .Select(a => new
+            {
+                a.Id,
+                a.Title,
+                SubjectName = a.Subject.Name,
+                a.Type,
+                a.DueDate,
+                SubmittedAt = db.Submissions
+                    .Where(s => s.AssignmentId == a.Id && s.StudentId == userId)
+                    .Select(s => (DateTime?)s.SubmittedAt)
+                    .FirstOrDefault(),
+                IsLate = db.Submissions
+                    .Where(s => s.AssignmentId == a.Id && s.StudentId == userId)
+                    .Select(s => (bool?)s.IsLate)
+                    .FirstOrDefault(),
+            })
+            .OrderBy(x => x.DueDate)
             .ToListAsync();
 
-        var assignments = await db.Assignments
-            .Where(a => subjectIds.Contains(a.SubjectId))
-            .Include(a => a.Subject)
-            .ToListAsync();
-
-        var assignmentIds = assignments.Select(a => a.Id).ToList();
-        var mySubmissions = await db.Submissions
-            .Where(s => s.StudentId == userId && assignmentIds.Contains(s.AssignmentId))
-            .ToListAsync();
-
-        var summaries = assignments.Select(a =>
-        {
-            var submission = mySubmissions.FirstOrDefault(s => s.AssignmentId == a.Id);
-            return new AssignmentSummaryDto(a.Id, a.Title, a.Subject.Name, a.Type.ToString(),
-                a.DueDate, submission?.SubmittedAt, submission is null ? null : submission.IsLate);
-        }).OrderBy(d => d.DueDate).ToList();
+        // a.Type.ToString() isn't projected inside the query above -- Npgsql's enum mapping
+        // doesn't guarantee server-side translation of enum .ToString(), so it's applied here
+        // after materialization instead.
+        var summaries = rows
+            .Select(x => new AssignmentSummaryDto(
+                x.Id, x.Title, x.SubjectName, x.Type.ToString(), x.DueDate, x.SubmittedAt, x.IsLate))
+            .ToList();
 
         return Ok(summaries);
     }

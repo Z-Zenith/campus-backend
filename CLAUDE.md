@@ -29,17 +29,22 @@ dotnet test BackendApi.Tests
 
 See `README.md` for local Postgres setup and `MIGRATIONS.md` for schema-change policy.
 
-## SEK-01 code execution (`DockerCodeRunner`)
+## SEK-01 code execution (`ContainerCodeRunner`)
 
-Each Coding-app Run shells out to `docker run` for a throwaway per-submission
-container — see `Services/DockerCodeRunner.cs`'s doc comment for why this replaced a
+Each Coding-app Run shells out to `<runtime> run` for a throwaway per-submission
+container — see `Services/ContainerCodeRunner.cs`'s doc comment for why this replaced a
 Judge0-backed `Judge0Client` (isolate's cgroup v1 requirement vs. this environment's
-cgroup v2 host). Requires:
-- `docker` on `PATH` and reachable from wherever this process runs (true for a bare
-  `dotnet run`; a containerized `backend-api` would need the host's Docker socket
+cgroup v2 host). `<runtime>` is Docker or Podman, whichever `Services/ContainerRuntimeDetector.cs`
+finds reachable once at startup (Docker preferred, Podman as a fallback for machines that only
+have that installed — see `Services/IContainerCli.cs`); `ContainerCodeRunner`/`TerminalSessionService`
+never hardcode `docker` directly. Requires:
+- Docker or Podman on `PATH` and reachable from wherever this process runs (true for a bare
+  `dotnet run`; a containerized `backend-api` would need the host's runtime socket
   bind-mounted in — a real security tradeoff, not currently wired up, see the doc
-  comment).
-- Every base image in `DockerCodeRunner.Languages` (`Services/DockerCodeRunner.cs:42-107`)
+  comment). If neither is reachable, `ICodeRunner.RunAsync`/`TerminalSessionService.StartAsync`
+  fail fast with the same "Code Execution Service is unreachable" error a mid-run failure
+  produces — there is no remote fallback wired in yet (see the SDA/SEK plan's Work Item B1).
+- Every base image in `ContainerCodeRunner.Languages` (`Services/ContainerCodeRunner.cs`)
   pulled at least once: `python:3.12-slim`, `gcc:13`, `eclipse-temurin:21-jdk`,
   `node:20-slim`, `mcr.microsoft.com/dotnet/sdk:8.0`, `keinos/sqlite3:latest`,
   `golang:1.22-alpine`, `rust:1-slim`, `ruby:3-slim`, `php:8-cli`, `bash:5` — first Run
@@ -51,11 +56,11 @@ cgroup v2 host). Requires:
   - `campus-kotlin-runner:local` (kotlin): `docker build -t campus-kotlin-runner:local -f
     docker/kotlin-runner.Dockerfile .`
   - `campus-dev-terminal:local` (the Coding app's integrated terminal, used by
-    `Services/TerminalSessionService.cs` rather than `DockerCodeRunner` directly):
+    `Services/TerminalSessionService.cs` rather than `ContainerCodeRunner` directly):
     `docker build -t campus-dev-terminal:local -f docker/dev-terminal.Dockerfile .`
 
 Run `docker/setup-code-images.sh` from the repo root to pull/build all of the above in one
-shot instead of doing it by hand.
+shot instead of doing it by hand — it auto-detects Docker vs. Podman the same way the app does.
 
 `campus-platform/docker-compose.yml`'s `judge0-*` services are no longer in this
 execution path — left in place rather than removed as part of this change, since

@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace BackendApi.Controllers;
 
 // SEK-01: the Coding app's backend — runs a multi-file project's entry point (each file
-// written to its own real relative path, see DockerCodeRunner) and returns
+// written to its own real relative path, see ContainerCodeRunner) and returns
 // stdout/stderr/exit code.
 [ApiController]
 [Route("api/v1")]

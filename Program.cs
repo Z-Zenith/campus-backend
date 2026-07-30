@@ -128,10 +128,21 @@ builder.Services.AddHttpClient<IAiServicesClient, AiServicesClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["AiServices:BaseUrl"] ?? "http://ai-services:8000");
 });
 
-// SEK-01: code execution — each Run shells out to `docker run` for a throwaway
-// per-submission sandbox (see DockerCodeRunner's doc comment for why this replaced
+// 0.5: probe once at startup for a usable local container runtime (Docker, then Podman —
+// see ContainerRuntimeDetector's doc comment) and share the result as a singleton, so both
+// code-execution and the integrated terminal below shell out to whichever one is actually
+// available instead of hardcoding `docker`. Detection is synchronous here (composition-root
+// startup, not a request path) — GetAwaiter().GetResult() is deliberate, not an oversight.
+builder.Services.AddSingleton<IContainerCli>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<Program>>();
+    return ContainerRuntimeDetector.DetectAsync(logger).GetAwaiter().GetResult();
+});
+
+// SEK-01: code execution — each Run shells out to `<runtime> run` for a throwaway
+// per-submission sandbox (see ContainerCodeRunner's doc comment for why this replaced
 // Judge0/isolate). No HttpClient needed, this doesn't talk HTTP.
-builder.Services.AddSingleton<ICodeRunner, DockerCodeRunner>();
+builder.Services.AddSingleton<ICodeRunner, ContainerCodeRunner>();
 
 // SEK-01: integrated terminal — persistent per-session sandbox container, reaped on an
 // idle timer (see TerminalSessionService's doc comment for scope). Singleton: the

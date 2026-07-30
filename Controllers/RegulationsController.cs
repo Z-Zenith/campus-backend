@@ -551,6 +551,112 @@ public class RegulationsController(AppDbContext db, IPermissionService permissio
         return NoContent();
     }
 
+    // AIS-06 "confirm and save": persists a (possibly admin-edited) LLM syllabus extraction's
+    // units/chapters under this offering in one shot, instead of the admin looping N+1
+    // ListUnits/CreateUnit/CreateChapter calls from the review UI. All-or-nothing: validated
+    // in full before anything is written, so a single colliding unit/chapter number doesn't
+    // leave a half-imported offering behind.
+    [HttpPost("offerings/{offeringId}/units/from-extraction")]
+    public async Task<ActionResult<List<CurriculumUnitWithChaptersDto>>> CreateUnitsFromExtraction(
+        Guid offeringId, CreateUnitsFromExtractionRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "manage_departments"))
+        {
+            return Forbid();
+        }
+
+        var offering = await db.RegulationSubjectOfferings
+            .Include(o => o.Regulation).ThenInclude(r => r.Department)
+            .FirstOrDefaultAsync(o => o.Id == offeringId);
+        if (offering is null)
+        {
+            return NotFound();
+        }
+        if (!await collegeScope.IsSameCollegeAsync(userId, offering.Regulation.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        if (request.Units.Count == 0)
+        {
+            return BadRequest("At least one unit is required.");
+        }
+        foreach (var unit in request.Units)
+        {
+            if (string.IsNullOrWhiteSpace(unit.Title))
+            {
+                return BadRequest("Every unit must have a title.");
+            }
+            foreach (var chapter in unit.Chapters)
+            {
+                if (string.IsNullOrWhiteSpace(chapter.Title))
+                {
+                    return BadRequest("Every chapter must have a title.");
+                }
+            }
+        }
+
+        var submittedUnitNumbers = request.Units.Select(u => u.UnitNumber).ToList();
+        if (submittedUnitNumbers.Distinct().Count() != submittedUnitNumbers.Count)
+        {
+            return Conflict("Duplicate unit numbers in the submitted extraction.");
+        }
+        foreach (var unit in request.Units)
+        {
+            var chapterNumbers = unit.Chapters.Select(c => c.ChapterNumber).ToList();
+            if (chapterNumbers.Distinct().Count() != chapterNumbers.Count)
+            {
+                return Conflict($"Duplicate chapter numbers in unit {unit.UnitNumber}.");
+            }
+        }
+
+        var existingUnitNumbers = await db.CurriculumUnits
+            .Where(u => u.OfferingId == offeringId && submittedUnitNumbers.Contains(u.UnitNumber))
+            .Select(u => u.UnitNumber)
+            .ToListAsync();
+        if (existingUnitNumbers.Count > 0)
+        {
+            return Conflict($"Unit number(s) {string.Join(", ", existingUnitNumbers)} already exist for this offering.");
+        }
+
+        var createdUnits = new List<CurriculumUnitWithChaptersDto>();
+        foreach (var unitRequest in request.Units)
+        {
+            var unit = new CurriculumUnit
+            {
+                Id = Guid.NewGuid(),
+                OfferingId = offeringId,
+                UnitNumber = unitRequest.UnitNumber,
+                Title = unitRequest.Title,
+                Description = unitRequest.Description,
+            };
+            db.CurriculumUnits.Add(unit);
+
+            var chapterDtos = new List<CurriculumChapterDto>();
+            foreach (var chapterRequest in unitRequest.Chapters)
+            {
+                var chapter = new CurriculumChapter
+                {
+                    Id = Guid.NewGuid(),
+                    UnitId = unit.Id,
+                    ChapterNumber = chapterRequest.ChapterNumber,
+                    Title = chapterRequest.Title,
+                    Description = chapterRequest.Description,
+                };
+                db.CurriculumChapters.Add(chapter);
+                chapterDtos.Add(new CurriculumChapterDto(chapter.Id, unit.Id, chapter.ChapterNumber, chapter.Title, chapter.Description));
+            }
+
+            createdUnits.Add(new CurriculumUnitWithChaptersDto(
+                unit.Id, offeringId, unit.UnitNumber, unit.Title, unit.Description, chapterDtos));
+        }
+
+        await db.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(ListUnits), new { offeringId }, createdUnits);
+    }
+
     private static ObjectResult? ValidateOfferingFields(int semester, decimal credits, decimal minAttendancePercent)
     {
         if (semester is < 1 or > 12)

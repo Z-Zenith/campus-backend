@@ -352,4 +352,152 @@ public class RegulationsControllerTests
         Assert.IsType<NoContentResult>(result);
         Assert.DoesNotContain(db.CurriculumUnits.Local, u => u.Id == unit.Id);
     }
+
+    private static async Task<(User caller, RegulationSubjectOffering offering)> SeedOfferingAsync(AppDbContext db)
+    {
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var regulation = new Regulation { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "R20", Name = "R20", EffectiveFromYear = 2020, IsActive = true };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var offering = new RegulationSubjectOffering { Id = Guid.NewGuid(), RegulationId = regulation.Id, SubjectId = subject.Id, Semester = 1, Credits = 3.0m, MinAttendancePercent = 75.0m };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Regulations.Add(regulation);
+        db.Subjects.Add(subject);
+        db.RegulationSubjectOfferings.Add(offering);
+        await GrantManageDepartmentsAsync(db, caller);
+        return (caller, offering);
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_CreatesUnitsAndChaptersInOneShot()
+    {
+        await using var db = NewDb();
+        var (caller, offering) = await SeedOfferingAsync(db);
+        var controller = ControllerAs(db, caller);
+
+        var request = new CreateUnitsFromExtractionRequest([
+            new CreateUnitFromExtractionRequest(1, "Arrays and Linked Lists", "From the syllabus PDF", [
+                new CreateChapterFromExtractionRequest(1, "Arrays", null),
+                new CreateChapterFromExtractionRequest(2, "Linked Lists", null),
+            ]),
+            new CreateUnitFromExtractionRequest(2, "Trees", null, []),
+        ]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var dtos = Assert.IsType<List<CurriculumUnitWithChaptersDto>>(created.Value);
+        Assert.Equal(2, dtos.Count);
+        Assert.Equal(2, dtos[0].Chapters.Count);
+        Assert.Empty(dtos[1].Chapters);
+        Assert.Equal(2, await db.CurriculumUnits.CountAsync(u => u.OfferingId == offering.Id));
+        Assert.Equal(2, await db.CurriculumChapters.CountAsync(c => c.Unit.OfferingId == offering.Id));
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_ForbidsCallerWithoutManageDepartmentsPermission()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = caller.CollegeId, Name = "CS" };
+        var regulation = new Regulation { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "R20", Name = "R20", EffectiveFromYear = 2020, IsActive = true };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var offering = new RegulationSubjectOffering { Id = Guid.NewGuid(), RegulationId = regulation.Id, SubjectId = subject.Id, Semester = 1, Credits = 3.0m, MinAttendancePercent = 75.0m };
+        db.Users.Add(caller);
+        db.Departments.Add(department);
+        db.Regulations.Add(regulation);
+        db.Subjects.Add(subject);
+        db.RegulationSubjectOfferings.Add(offering);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, caller);
+        var request = new CreateUnitsFromExtractionRequest([new CreateUnitFromExtractionRequest(1, "Arrays", null, [])]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_ForbidsCrossCollegeOffering()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "EE" };
+        var regulation = new Regulation { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Code = "R20", Name = "R20", EffectiveFromYear = 2020, IsActive = true };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Code = "EE101", Name = "Circuits" };
+        var offering = new RegulationSubjectOffering { Id = Guid.NewGuid(), RegulationId = regulation.Id, SubjectId = subject.Id, Semester = 1, Credits = 3.0m, MinAttendancePercent = 75.0m };
+        db.Users.Add(caller);
+        db.Departments.Add(otherDepartment);
+        db.Regulations.Add(regulation);
+        db.Subjects.Add(subject);
+        db.RegulationSubjectOfferings.Add(offering);
+        await GrantManageDepartmentsAsync(db, caller);
+
+        var controller = ControllerAs(db, caller);
+        var request = new CreateUnitsFromExtractionRequest([new CreateUnitFromExtractionRequest(1, "Arrays", null, [])]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_RejectsWhenSubmittedUnitNumbersCollideWithExisting()
+    {
+        await using var db = NewDb();
+        var (caller, offering) = await SeedOfferingAsync(db);
+        db.CurriculumUnits.Add(new CurriculumUnit { Id = Guid.NewGuid(), OfferingId = offering.Id, UnitNumber = 1, Title = "Existing Unit" });
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, caller);
+
+        var request = new CreateUnitsFromExtractionRequest([new CreateUnitFromExtractionRequest(1, "Arrays", null, [])]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+        Assert.Equal(1, await db.CurriculumUnits.CountAsync(u => u.OfferingId == offering.Id));
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_RejectsDuplicateUnitNumbersWithinSameRequest()
+    {
+        await using var db = NewDb();
+        var (caller, offering) = await SeedOfferingAsync(db);
+        var controller = ControllerAs(db, caller);
+
+        var request = new CreateUnitsFromExtractionRequest([
+            new CreateUnitFromExtractionRequest(1, "Arrays", null, []),
+            new CreateUnitFromExtractionRequest(1, "Duplicate", null, []),
+        ]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+        Assert.Equal(0, await db.CurriculumUnits.CountAsync(u => u.OfferingId == offering.Id));
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_RejectsEmptyUnitTitle()
+    {
+        await using var db = NewDb();
+        var (caller, offering) = await SeedOfferingAsync(db);
+        var controller = ControllerAs(db, caller);
+
+        var request = new CreateUnitsFromExtractionRequest([new CreateUnitFromExtractionRequest(1, "  ", null, [])]);
+        var result = await controller.CreateUnitsFromExtraction(offering.Id, request);
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task CreateUnitsFromExtraction_ReturnsNotFound_WhenOfferingDoesNotExist()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        db.Users.Add(caller);
+        await GrantManageDepartmentsAsync(db, caller);
+        var controller = ControllerAs(db, caller);
+
+        var request = new CreateUnitsFromExtractionRequest([new CreateUnitFromExtractionRequest(1, "Arrays", null, [])]);
+        var result = await controller.CreateUnitsFromExtraction(Guid.NewGuid(), request);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
 }

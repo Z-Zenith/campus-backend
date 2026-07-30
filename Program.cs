@@ -62,6 +62,9 @@ if (!builder.Environment.IsDevelopment() && connectionString == DevConnectionStr
 
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString, npgsqlOptions =>
 {
+    // Kept as its own statement rather than folded into the MapEnum chain below, which a
+    // separate in-flight schema PR also edits — avoids a same-line merge conflict there.
+    npgsqlOptions.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(2), errorCodesToAdd: null);
     npgsqlOptions
         .MapEnum<AccountType>()
         .MapEnum<AssignmentType>()

@@ -12,6 +12,7 @@ public class PermissionService(AppDbContext db) : IPermissionService
         var now = DateTime.UtcNow;
 
         var explicitGrant = await db.PermissionGrants
+            .AsNoTracking()
             .Where(g => g.UserId == userId && g.PermissionCode == permissionCode)
             .Where(g => g.ExpiresAt == null || g.ExpiresAt > now)
             .OrderByDescending(g => g.CreatedAt)
@@ -35,6 +36,7 @@ public class PermissionService(AppDbContext db) : IPermissionService
     public async Task<Guid?> GetDepartmentScopeAsync(Guid userId)
     {
         var hodBinding = await db.RoleBindings
+            .AsNoTracking()
             .Where(b => b.UserId == userId && b.RoleCode == "hod" && b.DepartmentId != null)
             .FirstOrDefaultAsync();
 

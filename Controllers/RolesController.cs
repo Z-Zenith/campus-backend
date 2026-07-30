@@ -97,6 +97,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
 
         var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
         var grants = await db.PermissionGrants
+            .AsNoTracking()
             .Include(g => g.User)
             .Where(g => g.User.CollegeId == callerCollegeId)
             .OrderByDescending(g => g.CreatedAt)
@@ -254,38 +255,46 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
             return BadRequest("The user must belong to the department's college.");
         }
 
-        await using var transaction = await db.Database.BeginTransactionAsync();
-
         var previousBindingId = department.HodRoleBindingId;
 
-        var newBinding = new RoleBinding
+        // Program.cs's EnableRetryOnFailure() rejects a bare BeginTransactionAsync (the
+        // execution strategy can't safely retry a user-initiated transaction it didn't start),
+        // so the transaction + its writes must run inside the strategy's own retry delegate.
+        var strategy = db.Database.CreateExecutionStrategy();
+        var newBindingId = Guid.NewGuid();
+        await strategy.ExecuteAsync(async () =>
         {
-            Id = Guid.NewGuid(),
-            UserId = candidate.Id,
-            RoleCode = "hod",
-            ScopeType = ScopeKind.Department,
-            DepartmentId = department.Id,
-            GrantedAt = DateTime.UtcNow,
-        };
-        db.RoleBindings.Add(newBinding);
-        await db.SaveChangesAsync();
+            await using var transaction = await db.Database.BeginTransactionAsync();
 
-        department.HodRoleBindingId = newBinding.Id;
-        await db.SaveChangesAsync();
-
-        if (previousBindingId is { } oldId && oldId != newBinding.Id)
-        {
-            var previousBinding = await db.RoleBindings.FindAsync(oldId);
-            if (previousBinding is not null)
+            var newBinding = new RoleBinding
             {
-                db.RoleBindings.Remove(previousBinding);
-                await db.SaveChangesAsync();
+                Id = newBindingId,
+                UserId = candidate.Id,
+                RoleCode = "hod",
+                ScopeType = ScopeKind.Department,
+                DepartmentId = department.Id,
+                GrantedAt = DateTime.UtcNow,
+            };
+            db.RoleBindings.Add(newBinding);
+            await db.SaveChangesAsync();
+
+            department.HodRoleBindingId = newBinding.Id;
+            await db.SaveChangesAsync();
+
+            if (previousBindingId is { } oldId && oldId != newBinding.Id)
+            {
+                var previousBinding = await db.RoleBindings.FindAsync(oldId);
+                if (previousBinding is not null)
+                {
+                    db.RoleBindings.Remove(previousBinding);
+                    await db.SaveChangesAsync();
+                }
             }
-        }
 
-        await transaction.CommitAsync();
+            await transaction.CommitAsync();
+        });
 
-        return Ok(ToDto(department, newBinding.UserId));
+        return Ok(ToDto(department, candidate.Id));
     }
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);

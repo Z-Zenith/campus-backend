@@ -93,6 +93,7 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
         }
 
         var reports = await db.TeacherReports
+            .AsNoTracking()
             .Include(r => r.Teacher)
             .Include(r => r.Section)
             .Include(r => r.Student)

@@ -180,6 +180,67 @@ CREATE TABLE IF NOT EXISTS subject_teachers (
 );
 CREATE INDEX IF NOT EXISTS idx_subject_teachers_teacher ON subject_teachers (teacher_id);
 
+-- Curriculum "regulation" (e.g. R20-style batch-year scheme). A subject's own identity
+-- (code/name/department/coordinator above) stays stable across regulations; the per-
+-- regulation curriculum detail lives in regulation_subject_offerings below. Schema pattern
+-- synthesized from public regulation-document structure (AICTE/JNTU-style), not verified
+-- against a real proprietary SIS's source (Banner/SAP) - flagged in the PR.
+CREATE TABLE IF NOT EXISTS regulations (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    department_id       uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+    code                text NOT NULL,
+    name                text NOT NULL,
+    effective_from_year int NOT NULL,
+    is_active           boolean NOT NULL DEFAULT true,
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (department_id, code)
+);
+
+-- Per-regulation curriculum detail for a subject - L-T-P-C (accreditation-mandatory per
+-- NBA/NAAC manuals), elective/lab flags, minimum attendance %. Known, disclosed scope
+-- limit: stays editable via PUT like any other admin resource; true historical-record
+-- freeze-once-a-batch-is-admitted would need an enrollment-to-regulation binding concept
+-- that doesn't exist anywhere else in this schema yet.
+CREATE TABLE IF NOT EXISTS regulation_subject_offerings (
+    id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    regulation_id          uuid NOT NULL REFERENCES regulations(id) ON DELETE CASCADE,
+    subject_id             uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    semester               int NOT NULL CHECK (semester BETWEEN 1 AND 12),
+    lecture_hours          int NOT NULL DEFAULT 0,
+    tutorial_hours         int NOT NULL DEFAULT 0,
+    practical_hours        int NOT NULL DEFAULT 0,
+    credits                numeric(3,1) NOT NULL,
+    is_elective            boolean NOT NULL DEFAULT false,
+    is_lab                 boolean NOT NULL DEFAULT false,
+    min_attendance_percent numeric(4,1) NOT NULL DEFAULT 75.0,
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (regulation_id, subject_id)
+);
+
+-- Syllabus structure under a per-regulation offering - keyed here rather than off Subject
+-- directly, since unit/chapter breakdown is exactly the curriculum detail that changes
+-- between regulations. Also the target shape for the (not-yet-built, LLM-based) AIS-06
+-- syllabus extraction pipeline - see Phase 2c.
+CREATE TABLE IF NOT EXISTS curriculum_units (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    offering_id uuid NOT NULL REFERENCES regulation_subject_offerings(id) ON DELETE CASCADE,
+    unit_number int NOT NULL,
+    title       text NOT NULL,
+    description text,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (offering_id, unit_number)
+);
+
+CREATE TABLE IF NOT EXISTS curriculum_chapters (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    unit_id        uuid NOT NULL REFERENCES curriculum_units(id) ON DELETE CASCADE,
+    chapter_number int NOT NULL,
+    title          text NOT NULL,
+    description    text,
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (unit_id, chapter_number)
+);
+
 CREATE TABLE IF NOT EXISTS sections (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     department_id uuid NOT NULL REFERENCES departments(id) ON DELETE CASCADE,

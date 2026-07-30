@@ -109,7 +109,7 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
             Id = Guid.NewGuid(),
             FeeRecordId = fee.Id,
             GatewayTxnId = gatewayTxnId,
-            Status = "confirmed",
+            Status = PaymentTransactionStatus.Confirmed,
             ProcessedAt = processedAt,
         });
         await db.SaveChangesAsync();

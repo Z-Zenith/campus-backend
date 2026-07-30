@@ -70,7 +70,9 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connect
         .MapEnum<FeeStatus>()
         .MapEnum<GroupType>()
         .MapEnum<NotificationType>()
+        .MapEnum<PaymentTransactionStatus>()
         .MapEnum<ScopeKind>()
+        .MapEnum<TimetableChangeRequestStatus>()
         .MapEnum<WhitelistRequestStatus>();
 }));
 

@@ -21,7 +21,7 @@ public partial class PaymentTransaction
     public string GatewayTxnId { get; set; } = null!;
 
     [Column("status")]
-    public string Status { get; set; } = null!;
+    public PaymentTransactionStatus Status { get; set; }
 
     [Column("processed_at")]
     public DateTime ProcessedAt { get; set; }

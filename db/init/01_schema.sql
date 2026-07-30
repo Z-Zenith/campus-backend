@@ -51,6 +51,14 @@ DO $$ BEGIN
     CREATE TYPE ocr_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'not_applicable');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+DO $$ BEGIN
+    CREATE TYPE timetable_change_request_status AS ENUM ('pending', 'approved', 'rejected');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    CREATE TYPE payment_transaction_status AS ENUM ('confirmed', 'failed');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ─── 1.1 Tenancy & Identity ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS colleges (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -572,7 +580,7 @@ CREATE TABLE IF NOT EXISTS timetable_change_requests (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     teacher_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     description  text NOT NULL,
-    status       text NOT NULL DEFAULT 'pending',
+    status       timetable_change_request_status NOT NULL DEFAULT 'pending',
     requested_at timestamptz NOT NULL DEFAULT now(),
     reviewed_by  uuid REFERENCES users(id) ON DELETE SET NULL
 );
@@ -594,7 +602,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     fee_record_id uuid NOT NULL REFERENCES fee_records(id) ON DELETE CASCADE,
     gateway_txn_id text NOT NULL UNIQUE,
-    status        text NOT NULL,
+    status        payment_transaction_status NOT NULL,
     processed_at  timestamptz NOT NULL DEFAULT now()
 );
 

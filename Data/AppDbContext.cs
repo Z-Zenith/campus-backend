@@ -127,7 +127,9 @@ public partial class AppDbContext : DbContext
             .HasPostgresEnum<GroupType>()
             .HasPostgresEnum<NotificationType>()
             .HasPostgresEnum<OcrStatus>()
+            .HasPostgresEnum<PaymentTransactionStatus>()
             .HasPostgresEnum<ScopeKind>()
+            .HasPostgresEnum<TimetableChangeRequestStatus>()
             .HasPostgresEnum<WhitelistRequestStatus>()
             .HasPostgresExtension("pgcrypto");
 
@@ -508,6 +510,7 @@ public partial class AppDbContext : DbContext
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.ProcessedAt).HasDefaultValueSql("now()");
+            entity.Property(e => e.Status).HasColumnType("payment_transaction_status");
 
             entity.HasOne(d => d.FeeRecord).WithMany(p => p.PaymentTransactions).HasConstraintName("payment_transactions_fee_record_id_fkey");
         });
@@ -710,7 +713,7 @@ public partial class AppDbContext : DbContext
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.RequestedAt).HasDefaultValueSql("now()");
-            entity.Property(e => e.Status).HasDefaultValueSql("'pending'::text");
+            entity.Property(e => e.Status).HasColumnType("timetable_change_request_status").HasDefaultValueSql("'pending'::timetable_change_request_status");
 
             entity.HasOne(d => d.ReviewedByNavigation).WithMany(p => p.TimetableChangeRequestReviewedByNavigations)
                 .OnDelete(DeleteBehavior.SetNull)

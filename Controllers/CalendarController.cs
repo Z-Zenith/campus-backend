@@ -55,6 +55,110 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         return Ok(new EventDto(newEvent.Id, newEvent.Title, newEvent.StartTime, newEvent.EndTime, false, newEvent.EventType));
     }
 
+    // Phase 5 - admin-facing event management. Distinct route from GET /events below
+    // (student-gated, Forbid()s any non-student) - an admin had no way to see events they'd
+    // created after the fact, let alone change or cancel one, before this.
+    [HttpGet("events/created")]
+    public async Task<ActionResult<List<AdminEventDto>>> ListCreatedEvents()
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_event"))
+        {
+            return Forbid();
+        }
+
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var events = await db.Events
+            .Where(e => e.CollegeId == caller.CollegeId)
+            .OrderByDescending(e => e.StartTime)
+            .ToListAsync();
+        return Ok(events.Select(ToAdminDto).ToList());
+    }
+
+    [HttpPut("events/{id}")]
+    public async Task<ActionResult<AdminEventDto>> UpdateEvent(Guid id, UpdateEventRequest request)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_event"))
+        {
+            return Forbid();
+        }
+
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var existingEvent = await db.Events.FirstOrDefaultAsync(e => e.Id == id);
+        if (existingEvent is null)
+        {
+            return NotFound();
+        }
+        // #126/#129-class check: a create_event holder must not be able to edit an event
+        // belonging to another college by guessing/enumerating its id.
+        if (existingEvent.CollegeId != caller.CollegeId)
+        {
+            return Forbid();
+        }
+
+        if (request.EndTime <= request.StartTime)
+        {
+            return BadRequest(new { error = "invalid_time_range", message = "EndTime must be after StartTime." });
+        }
+
+        existingEvent.Title = request.Title;
+        existingEvent.StartTime = request.StartTime;
+        existingEvent.EndTime = request.EndTime;
+        existingEvent.RestrictedYears = request.RestrictedYears;
+        existingEvent.RestrictedDepartments = request.RestrictedDepartments;
+        if (request.EventType is { } eventType)
+        {
+            existingEvent.EventType = eventType;
+        }
+        await db.SaveChangesAsync();
+
+        return Ok(ToAdminDto(existingEvent));
+    }
+
+    // Cascade-deletes EventRegistrations (event_registrations.event_id is ON DELETE CASCADE)
+    // - unlike Subject.Delete's dependents, a registration only means something while its
+    // event still exists, so no pre-delete guard is needed here.
+    [HttpDelete("events/{id}")]
+    public async Task<IActionResult> DeleteEvent(Guid id)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_event"))
+        {
+            return Forbid();
+        }
+
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null)
+        {
+            return Unauthorized();
+        }
+
+        var existingEvent = await db.Events.FirstOrDefaultAsync(e => e.Id == id);
+        if (existingEvent is null)
+        {
+            return NotFound();
+        }
+        if (existingEvent.CollegeId != caller.CollegeId)
+        {
+            return Forbid();
+        }
+
+        db.Events.Remove(existingEvent);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
     // SDA-20
     [HttpGet("events")]
     public async Task<ActionResult<List<EventDto>>> ListEvents()
@@ -287,6 +391,9 @@ public class CalendarController(AppDbContext db, IPermissionService permissions)
         var student = await db.Users.FindAsync(CurrentUserId());
         return student is { AccountType: AccountType.Student } ? student : null;
     }
+
+    private static AdminEventDto ToAdminDto(Event e) => new(
+        e.Id, e.Title, e.StartTime, e.EndTime, e.RestrictedYears, e.RestrictedDepartments, e.EventType);
 
     private static TodoDto ToTodoDto(Todo t) => new(t.Id, t.Title, t.DueDate, t.Completed);
 

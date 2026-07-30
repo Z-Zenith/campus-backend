@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS regulations (
     name                text NOT NULL,
     effective_from_year int NOT NULL,
     is_active           boolean NOT NULL DEFAULT true,
+    updated_at          timestamptz NOT NULL DEFAULT now(),
     UNIQUE (department_id, code)
 );
 
@@ -211,6 +212,7 @@ CREATE TABLE IF NOT EXISTS regulation_subject_offerings (
     is_elective            boolean NOT NULL DEFAULT false,
     is_lab                 boolean NOT NULL DEFAULT false,
     min_attendance_percent numeric(4,1) NOT NULL DEFAULT 75.0,
+    updated_at             timestamptz NOT NULL DEFAULT now(),
     UNIQUE (regulation_id, subject_id)
 );
 
@@ -224,6 +226,7 @@ CREATE TABLE IF NOT EXISTS curriculum_units (
     unit_number int NOT NULL,
     title       text NOT NULL,
     description text,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (offering_id, unit_number)
 );
 
@@ -233,6 +236,7 @@ CREATE TABLE IF NOT EXISTS curriculum_chapters (
     chapter_number int NOT NULL,
     title          text NOT NULL,
     description    text,
+    updated_at     timestamptz NOT NULL DEFAULT now(),
     UNIQUE (unit_id, chapter_number)
 );
 

@@ -25,6 +25,9 @@ public partial class CurriculumChapter
     [Column("description")]
     public string? Description { get; set; }
 
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
     [ForeignKey("UnitId")]
     [InverseProperty("CurriculumChapters")]
     public virtual CurriculumUnit Unit { get; set; } = null!;

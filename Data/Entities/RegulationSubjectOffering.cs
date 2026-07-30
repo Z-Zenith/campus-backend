@@ -44,6 +44,9 @@ public partial class RegulationSubjectOffering
     [Column("min_attendance_percent", TypeName = "numeric(4,1)")]
     public decimal MinAttendancePercent { get; set; }
 
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
     [ForeignKey("RegulationId")]
     [InverseProperty("RegulationSubjectOfferings")]
     public virtual Regulation Regulation { get; set; } = null!;

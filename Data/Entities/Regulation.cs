@@ -29,6 +29,9 @@ public partial class Regulation
     [Column("is_active")]
     public bool IsActive { get; set; }
 
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
     [ForeignKey("DepartmentId")]
     [InverseProperty("Regulations")]
     public virtual Department Department { get; set; } = null!;

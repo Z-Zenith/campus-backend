@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS section_enrollments (
 DO $$ BEGIN
     ALTER TABLE role_bindings ADD COLUMN section_id uuid REFERENCES sections(id) ON DELETE RESTRICT;
 EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_role_bindings_section ON role_bindings (section_id);
 
 DO $$ BEGIN
     ALTER TABLE role_bindings ADD CONSTRAINT role_bindings_scope_target_check CHECK (

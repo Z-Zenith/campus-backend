@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace BackendApi.Data.Entities;
 
 [Table("role_bindings")]
+[Index("SectionId", Name = "idx_role_bindings_section")]
 public partial class RoleBinding
 {
     [Key]

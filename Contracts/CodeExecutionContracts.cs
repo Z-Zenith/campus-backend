@@ -27,3 +27,13 @@ public record TerminalStartResponse(Guid SessionId);
 public record TerminalExecRequest(string Command);
 
 public record TerminalExecResultDto(string Stdout, string Stderr, int ExitCode);
+
+// B2 live preview (SDA/SEK plan): the desktop client opens PreviewUrl as a new tab in its
+// own built-in browser — see PreviewSessionService's doc comment for the static-vs-
+// persistent distinction "mode" carries. IsReady is false only for the persistent mode
+// when the server didn't start listening within the readiness-poll timeout (the desktop
+// client should show a clear "still starting" or "failed to start" state, not silently
+// open a URL that isn't answering yet).
+public record RunPreviewRequest(string EntryFilePath, IReadOnlyList<CodeFileDto> Files);
+
+public record RunPreviewResponse(Guid SessionId, string PreviewUrl, string Mode, bool IsReady);

@@ -120,6 +120,148 @@ public sealed class ContainerCodeRunner(ILogger<ContainerCodeRunner> logger, ICo
         ["shell"] = new("bash:5", Compile: null, Run: entry => $"bash {Quote(entry)}"),
     };
 
+    // B2 persistent-server live preview (SDA/SEK plan): only Node.js and Python have a
+    // real "start a long-lived server" mode — every other language in Languages above is
+    // a one-shot batch Run. Per 0.4's spike, the host's published port must reach a real
+    // (non-`--network none`) network, so this mode has genuine outbound network access
+    // unlike every other execution path here — a deliberate, flagged exception (see
+    // StartPersistentAsync's own doc comment), not a silent gap.
+    private static readonly Dictionary<string, string> PersistentServerImages = new()
+    {
+        ["nodejs"] = "node:20-slim",
+        ["javascript"] = "node:20-slim",
+        ["python"] = "python:3.12-slim",
+    };
+
+    // Heroku-style convention: the student's server code is expected to read the PORT
+    // env var and bind 0.0.0.0:$PORT (e.g. Express's `app.listen(process.env.PORT)`,
+    // Flask's `app.run(host='0.0.0.0', port=int(os.environ['PORT']))`). A fixed,
+    // well-known container-side port rather than trying to detect whatever port the
+    // student's code happens to bind — code that hardcodes a different port won't be
+    // reachable through this preview; documented as a real, known limitation of this
+    // convention, not silently swallowed.
+    private const int PersistentServerContainerPort = 3000;
+
+    public sealed record PersistentRunHandle(string ContainerId, int HostPort, bool IsReady);
+
+    public async Task<PersistentRunHandle> StartPersistentAsync(
+        string entryFilePath, IReadOnlyList<CodeFileDto> files, int hostPort, CancellationToken ct = default)
+    {
+        var entryFile = files.FirstOrDefault(f => f.Path == entryFilePath)
+            ?? throw new InvalidOperationException($"Entry file '{entryFilePath}' is not one of the submitted files.");
+        if (!PersistentServerImages.TryGetValue(entryFile.Language, out var image))
+        {
+            throw new UnsupportedLanguageException(entryFile.Language);
+        }
+        if (!containerCli.IsAvailable)
+        {
+            throw new HttpRequestException("The Code Execution Service is unreachable. Try again shortly.");
+        }
+
+        var runCommand = entryFile.Language switch
+        {
+            "python" => $"python3 {Quote(entryFilePath)}",
+            _ => $"node {Quote(entryFilePath)}",
+        };
+
+        var workDir = CreateWorkDir();
+        WriteFiles(workDir, files);
+
+        var psi = new ProcessStartInfo(containerCli.ExecutableName)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        // Deliberately NOT --network none (see the class-level doc comment on
+        // PersistentServerImages) — this container needs real network I/O to be
+        // reachable via -p, which --network none/an --internal bridge cannot support
+        // (confirmed empirically in the 0.4 spike). Otherwise the same resource ceilings
+        // every other execution path here uses.
+        foreach (var arg in new[]
+        {
+            "run", "-d",
+            "--memory", "256m", "--memory-swap", "256m",
+            "--pids-limit", "256", "--cpus", "1.0",
+            "-e", $"PORT={PersistentServerContainerPort}",
+            "-p", $"127.0.0.1:{hostPort}:{PersistentServerContainerPort}",
+            "-v", $"{ToHostVisiblePath(workDir)}:/box",
+            "-w", "/box",
+            image, "sh", "-c", runCommand,
+        })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {containerCli.ExecutableName} process.");
+        var containerId = (await process.StandardOutput.ReadToEndAsync(ct)).Trim();
+        await process.WaitForExitAsync(ct);
+        if (process.ExitCode != 0)
+        {
+            var stderr = await process.StandardError.ReadToEndAsync(ct);
+            TryDeleteWorkDir(workDir);
+            throw new HttpRequestException($"The Code Execution Service is unreachable. Try again shortly. ({stderr.Trim()})");
+        }
+
+        var isReady = await WaitForPortReadyAsync(hostPort, TimeSpan.FromSeconds(15), ct);
+        return new PersistentRunHandle(containerId, hostPort, isReady);
+    }
+
+    public async Task StopPersistentAsync(string containerId, string workDir, CancellationToken ct = default)
+    {
+        if (!containerCli.IsAvailable)
+        {
+            return;
+        }
+        try
+        {
+            var psi = new ProcessStartInfo(containerCli.ExecutableName) { UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("rm");
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add(containerId);
+            using var process = Process.Start(psi);
+            if (process is not null)
+            {
+                await process.WaitForExitAsync(ct);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Best-effort — an already-gone container isn't worth failing the stop over,
+            // matching TerminalSessionService.CloseSessionAsync's own convention.
+        }
+        TryDeleteWorkDir(workDir);
+    }
+
+    // Polls with a real TCP connect attempt rather than trusting "container is running" —
+    // a Node/Flask server can be up (process started) seconds before it actually binds
+    // its port, and this is what StartPersistentAsync's caller actually needs to know
+    // before handing a previewUrl to a student.
+    private static async Task<bool> WaitForPortReadyAsync(int port, TimeSpan timeout, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        while (!cts.IsCancellationRequested)
+        {
+            try
+            {
+                using var client = new System.Net.Sockets.TcpClient();
+                await client.ConnectAsync(System.Net.IPAddress.Loopback, port, cts.Token);
+                return true;
+            }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or OperationCanceledException)
+            {
+                if (cts.IsCancellationRequested)
+                {
+                    return false;
+                }
+                await Task.Delay(300, ct);
+            }
+        }
+        return false;
+    }
+
     public async Task<CodeRunResultDto> RunAsync(
         string entryFilePath, IReadOnlyList<CodeFileDto> files, string? stdin, CancellationToken ct = default)
     {

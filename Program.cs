@@ -141,10 +141,12 @@ builder.Services.AddSingleton<IContainerCli>(sp =>
 
 // SEK-01: code execution — each Run shells out to `<runtime> run` for a throwaway
 // per-submission sandbox (see ContainerCodeRunner's doc comment for why this replaced
-// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP. Registered keyed
-// ("primary") rather than as plain ICodeRunner — CompositeCodeRunner below is what's
-// actually injected as ICodeRunner, with this as its primary.
-builder.Services.AddKeyedSingleton<ICodeRunner, ContainerCodeRunner>("primary");
+// Judge0/isolate). No HttpClient needed, this doesn't talk HTTP. Registered as itself
+// (one singleton instance) AND exposed keyed ("primary") as ICodeRunner — CompositeCodeRunner
+// resolves it keyed; PreviewSessionService (B2) resolves the concrete type directly, since
+// it needs StartPersistentAsync/StopPersistentAsync, which aren't part of ICodeRunner.
+builder.Services.AddSingleton<ContainerCodeRunner>();
+builder.Services.AddKeyedSingleton<ICodeRunner>("primary", (sp, _) => sp.GetRequiredService<ContainerCodeRunner>());
 
 // B1: Piston-backed remote-execution fallback (see PistonClient's doc comment for why
 // Piston, not Judge0, per the 0.1 spike). Self-hosted, internal-only — no credentials.
@@ -166,6 +168,11 @@ builder.Services.AddSingleton<ICodeRunner, CompositeCodeRunner>();
 // ParentLoginLockoutService above.
 builder.Services.AddSingleton<TerminalSessionService>();
 builder.Services.AddHostedService<TerminalSessionReaperHostedService>();
+
+// B2: live preview sessions (static file server or persistent server container) — same
+// singleton-plus-reaper shape as TerminalSessionService/its reaper above.
+builder.Services.AddSingleton<PreviewSessionService>();
+builder.Services.AddHostedService<PreviewSessionReaperHostedService>();
 
 // AIS-02: Copyleaks — external, credentialed (Copyleaks:Email/ApiKey/WebhookSecret).
 // No default base URL fallback: an empty ApiKey/Email already fails closed inside

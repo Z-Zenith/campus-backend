@@ -988,6 +988,73 @@ public class TimetableControllerTests
         Assert.IsType<ForbidResult>(result.Result);
     }
 
+    // Phase 7 - admin-facing timetable browsing. timetable/mine is teacher-personal-schedule
+    // scoped and always empty for an Admin account - this is the endpoint that actually lets
+    // an admin browse a section's timetable.
+    [Fact]
+    public async Task SectionTimetable_ForbidsCallerWithoutCreateTimetablePermission()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        await db.SaveChangesAsync();
+
+        var admin = NewUser(AccountType.AdminTier);
+        var controller = ControllerAs(db, admin); // FakePermissionService denies everything
+        var result = await controller.SectionTimetable(section.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task SectionTimetable_ForbidsSectionOutsideCallersDepartmentScope()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        await db.SaveChangesAsync();
+
+        var admin = NewUser(AccountType.AdminTier);
+        var hodOfOtherDepartment = new FakeDepartmentScopedPermissionService(Guid.NewGuid());
+        var controller = ControllerAs(db, admin, hodOfOtherDepartment);
+        var result = await controller.SectionTimetable(section.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task SectionTimetable_ReturnsSlotsForSection()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = teacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        var admin = NewUser(AccountType.AdminTier);
+        admin.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.Users.Add(teacher);
+        db.Users.Add(admin);
+        db.TimetableSlots.Add(slot);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin, new AllowingPermissionService());
+        var result = await controller.SectionTimetable(section.Id);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var slots = Assert.IsType<List<TimetableSlotDto>>(ok.Value);
+        var dto = Assert.Single(slots);
+        Assert.Equal(subject.Name, dto.SubjectName);
+        Assert.Equal(section.Name, dto.SectionName);
+    }
+
     // A department-scoped (HoD-tier) caller for a specific department other than the
     // section's own - exercises IsInScopeAsync's departmentScope branch (as opposed to
     // AllowingPermissionService's global/null scope).

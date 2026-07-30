@@ -467,7 +467,8 @@ CREATE TABLE IF NOT EXISTS clubs (
     -- trust this column's contents as safe to inline into the app's own DOM.
     home_site_html            text,
     created_by                uuid REFERENCES users(id) ON DELETE SET NULL,
-    created_at                timestamptz NOT NULL DEFAULT now()
+    created_at                timestamptz NOT NULL DEFAULT now(),
+    updated_at                timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_clubs_college ON clubs (college_id);
 
@@ -478,6 +479,7 @@ CREATE TABLE IF NOT EXISTS club_members (
     joined_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (club_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_club_members_user ON club_members (user_id);
 
 CREATE TABLE IF NOT EXISTS club_posts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -534,6 +536,7 @@ CREATE TABLE IF NOT EXISTS staff_group_members (
     joined_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (staff_group_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_staff_group_members_user ON staff_group_members (user_id);
 
 CREATE TABLE IF NOT EXISTS staff_group_posts (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

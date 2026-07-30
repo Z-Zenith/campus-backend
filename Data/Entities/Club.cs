@@ -43,6 +43,9 @@ public partial class Club
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }
 
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
     [ForeignKey("CollegeId")]
     [InverseProperty("Clubs")]
     public virtual College College { get; set; } = null!;

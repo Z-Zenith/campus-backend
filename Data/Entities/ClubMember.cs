@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace BackendApi.Data.Entities;
 
 [Table("club_members")]
+[Index("UserId", Name = "idx_club_members_user")]
 [Index("ClubId", "UserId", Name = "club_members_club_id_user_id_key", IsUnique = true)]
 public partial class ClubMember
 {

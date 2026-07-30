@@ -34,6 +34,9 @@ public partial class Subject
     public virtual Department Department { get; set; } = null!;
 
     [InverseProperty("Subject")]
+    public virtual ICollection<ExamSchedule> ExamSchedules { get; set; } = new List<ExamSchedule>();
+
+    [InverseProperty("Subject")]
     public virtual ICollection<ExternalMark> ExternalMarks { get; set; } = new List<ExternalMark>();
 
     [InverseProperty("Subject")]

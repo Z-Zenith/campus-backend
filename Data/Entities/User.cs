@@ -82,6 +82,9 @@ public partial class User
     [InverseProperty("CreatedByNavigation")]
     public virtual ICollection<Event> Events { get; set; } = new List<Event>();
 
+    [InverseProperty("CreatedByNavigation")]
+    public virtual ICollection<ExamSchedule> ExamSchedules { get; set; } = new List<ExamSchedule>();
+
     [InverseProperty("ApprovedByNavigation")]
     public virtual ICollection<ExternalMark> ExternalMarkApprovedByNavigations { get; set; } = new List<ExternalMark>();
 

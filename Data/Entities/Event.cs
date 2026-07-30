@@ -35,6 +35,9 @@ public partial class Event
     [Column("restricted_departments")]
     public List<Guid>? RestrictedDepartments { get; set; }
 
+    [Column("event_type")]
+    public EventType EventType { get; set; }
+
     [ForeignKey("CollegeId")]
     [InverseProperty("Events")]
     public virtual College College { get; set; } = null!;

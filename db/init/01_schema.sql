@@ -51,6 +51,14 @@ DO $$ BEGIN
     CREATE TYPE ocr_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'not_applicable');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+DO $$ BEGIN
+    CREATE TYPE event_type AS ENUM ('academic', 'holiday', 'cultural', 'sports', 'other');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    CREATE TYPE exam_type AS ENUM ('internal', 'external');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ─── 1.1 Tenancy & Identity ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS colleges (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -287,6 +295,27 @@ CREATE TABLE IF NOT EXISTS class_sessions (
     UNIQUE (timetable_slot_id, session_date)
 );
 
+-- Exam schedules - admin-facing scheduling of when/where a section sits an exam for a
+-- subject. Deliberately a scheduling record only (date/time/room), not a marks-recording
+-- one - internal_marks/external_marks (Part 1.5) already own the actual score once the
+-- exam happens; exam_type mirrors that same internal/external split.
+CREATE TABLE IF NOT EXISTS exam_schedules (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    section_id uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+    subject_id uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    exam_type  exam_type NOT NULL,
+    exam_date  date NOT NULL,
+    start_time time NOT NULL,
+    end_time   time NOT NULL,
+    room       text,
+    created_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (section_id, subject_id, exam_type),
+    CHECK (end_time > start_time)
+);
+CREATE INDEX IF NOT EXISTS idx_exam_schedules_section
+    ON exam_schedules (section_id, exam_date);
+
 -- ─── 1.3 Attendance ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS attendance_records (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -450,6 +479,7 @@ CREATE TABLE IF NOT EXISTS events (
     created_by             uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     restricted_years       int[],
     restricted_departments uuid[],
+    event_type             event_type NOT NULL DEFAULT 'academic',
     CHECK (end_time > start_time)
 );
 CREATE INDEX IF NOT EXISTS idx_events_college_time

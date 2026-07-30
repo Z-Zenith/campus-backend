@@ -28,3 +28,7 @@ public enum FeeStatus { Pending, Paid }
 public enum OcrStatus { Pending, Processing, Completed, Failed, NotApplicable }
 
 public enum WhitelistRequestStatus { Pending, Approved, Rejected }
+
+public enum EventType { Academic, Holiday, Cultural, Sports, Other }
+
+public enum ExamType { Internal, External }

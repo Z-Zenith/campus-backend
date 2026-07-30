@@ -67,9 +67,12 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connect
         .MapEnum<AssignmentType>()
         .MapEnum<AttendanceStatus>()
         .MapEnum<DocType>()
+        .MapEnum<EventType>()
+        .MapEnum<ExamType>()
         .MapEnum<FeeStatus>()
         .MapEnum<GroupType>()
         .MapEnum<NotificationType>()
+        .MapEnum<OcrStatus>()
         .MapEnum<ScopeKind>()
         .MapEnum<WhitelistRequestStatus>();
 }));

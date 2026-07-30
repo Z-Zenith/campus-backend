@@ -370,6 +370,41 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         return targetCollegeId == callerCollegeId;
     }
 
+    // Phase 7 - admin-facing timetable browsing. timetable/mine below is teacher-personal-
+    // schedule scoped (filters by TeacherId) and always returns empty for an Admin account -
+    // there was no way for an admin to browse any section's timetable at all before this,
+    // only ever re-view whatever Generate last returned in-memory (see TimetablePage's
+    // paired frontend fix). Reuses the same IsInScopeAsync department-or-college clamp as
+    // the teacher-assignment endpoints above.
+    [HttpGet("timetable/sections/{sectionId}")]
+    public async Task<ActionResult<List<TimetableSlotDto>>> SectionTimetable(Guid sectionId)
+    {
+        var userId = CurrentUserId();
+        if (!await permissions.HasPermissionAsync(userId, "create_timetable"))
+        {
+            return Forbid();
+        }
+
+        var section = await db.Sections.Include(s => s.Department).FirstOrDefaultAsync(s => s.Id == sectionId);
+        if (section is null)
+        {
+            return NotFound();
+        }
+        if (!await IsInScopeAsync(userId, section.DepartmentId, section.Department.CollegeId))
+        {
+            return Forbid();
+        }
+
+        var slots = await db.TimetableSlots
+            .Where(s => s.SectionId == sectionId)
+            .Include(s => s.Section)
+            .Include(s => s.Subject)
+            .Include(s => s.Teacher)
+            .OrderBy(s => s.DayOfWeek).ThenBy(s => s.StartTime)
+            .ToListAsync();
+        return Ok(slots.Select(ToDto).ToList());
+    }
+
     // TWA-10
     [HttpGet("timetable/mine")]
     public async Task<ActionResult<List<TimetableSlotDto>>> Mine()

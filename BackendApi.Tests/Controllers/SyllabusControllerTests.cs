@@ -13,8 +13,9 @@ using Microsoft.EntityFrameworkCore;
 namespace BackendApi.Tests.Controllers;
 
 // AIS-06: thin proxy in front of campus-ai-services' POST /api/v1/syllabus-extraction.
-// Extraction only — no "confirm and save" path exists (see SyllabusController's own
-// comment for why), so these tests only cover the proxying/gating behavior.
+// Extraction only — "confirm and save" is a separate endpoint
+// (RegulationsControllerTests.CreateUnitsFromExtraction*), so these tests only cover the
+// proxying/gating behavior.
 public class SyllabusControllerTests
 {
     private static AppDbContext NewDb() => new(
@@ -88,7 +89,10 @@ public class SyllabusControllerTests
         await db.SaveChangesAsync();
         var fakeAi = new FakeAiServicesClient
         {
-            SyllabusExtractionResult = new SyllabusExtractionResult("CS101", "Intro to CS", "Dr. Smith", 4.0, ["low confidence on credits"]),
+            SyllabusExtractionResult = new SyllabusExtractionResult(
+                "CS101", "Intro to CS", 4.0, ["Introduction to Algorithms"],
+                [new SyllabusUnitExtractionResult(1, "Arrays", null, [new SyllabusChapterExtractionResult(1, "Arrays basics", null)])],
+                ["low confidence on credits"]),
         };
         var controller = ControllerAs(db, teacher, fakeAi);
 
@@ -98,11 +102,28 @@ public class SyllabusControllerTests
         var dto = Assert.IsType<SyllabusExtractionResponseDto>(ok.Value);
         Assert.Equal("CS101", dto.CourseCode);
         Assert.Equal("Intro to CS", dto.CourseName);
-        Assert.Equal("Dr. Smith", dto.InstructorName);
         Assert.Equal(4.0, dto.Credits);
+        Assert.Equal(["Introduction to Algorithms"], dto.Textbooks);
+        Assert.Single(dto.Units);
+        Assert.Equal("Arrays basics", dto.Units[0].Chapters[0].Title);
         Assert.Single(dto.ConfidenceNotes);
         Assert.NotNull(fakeAi.LastPdfBytes);
         Assert.NotEmpty(fakeAi.LastPdfBytes!);
+    }
+
+    [Fact]
+    public async Task Extract_ReturnsUnprocessableEntity_WhenAiServicesExtractionFails()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+        var fakeAi = new FakeAiServicesClient { ThrowExtractionFailedMessage = "The extraction model declined to process this document." };
+        var controller = ControllerAs(db, teacher, fakeAi);
+
+        var result = await controller.Extract(FakePdfFile(), CancellationToken.None);
+
+        Assert.IsType<UnprocessableEntityObjectResult>(result.Result);
     }
 
     [Fact]

@@ -17,17 +17,37 @@ public record SuspiciousFlagResult(string StudentId, string? ClassSessionId, str
 
 public record BrowsingVisitInput(string Url, DateTime VisitedAt, int? DurationSeconds);
 
-// AIS-06: extracted fields from a syllabus PDF, straight off campus-ai-services'
-// POST /api/v1/syllabus-extraction response. Every field but confidence_notes is nullable
-// because the extractor may not confidently find them; confidence_notes is always an array
-// (possibly empty) explaining which fields it couldn't confidently find.
+// AIS-06: one chapter under a unit, straight off campus-ai-services' (now LLM-backed, see
+// that repo's ai_provider.py) POST /api/v1/syllabus-extraction response.
+public record SyllabusChapterExtractionResult(int ChapterNumber, string Title, string? Description);
+
+// AIS-06: one unit of the syllabus, with its chapter breakdown.
+public record SyllabusUnitExtractionResult(
+    int UnitNumber, string Title, string? Description, IReadOnlyList<SyllabusChapterExtractionResult> Chapters);
+
+// AIS-06: extracted fields from a syllabus PDF. CourseCode/CourseName/Credits are nullable
+// because the extractor may not confidently find them; Textbooks/Units/ConfidenceNotes are
+// always arrays (possibly empty). No InstructorName - dropped when campus-ai-services moved
+// from the old regex extractor's 4-field shape to the LLM-backed units/chapters shape (see
+// that repo's PR history for AIS-06).
 public record SyllabusExtractionResult(
-    string? CourseCode, string? CourseName, string? InstructorName, double? Credits, IReadOnlyList<string> ConfidenceNotes);
+    string? CourseCode,
+    string? CourseName,
+    double? Credits,
+    IReadOnlyList<string> Textbooks,
+    IReadOnlyList<SyllabusUnitExtractionResult> Units,
+    IReadOnlyList<string> ConfidenceNotes);
 
 // AIS-06: thrown when campus-ai-services rejects the PDF as malformed/undecodable (HTTP 400
 // per its locked contract). Lets the controller respond with its own 400 rather than letting
 // EnsureSuccessStatusCode's generic HttpRequestException bubble up as a 500.
 public class SyllabusExtractionInvalidPdfException : Exception;
+
+// AIS-06: thrown when campus-ai-services' extractor itself failed - a safety refusal or
+// malformed model output (HTTP 422 per its contract), as opposed to a structurally bad PDF
+// (HTTP 400, see SyllabusExtractionInvalidPdfException above). Distinct exception so the
+// controller can tell the caller which kind of failure this was.
+public class SyllabusExtractionFailedException(string message) : Exception(message);
 
 // AIS-01/03/04/06/07: thin HTTP client for the self-hosted AI Services container
 // (services/ai-services — FastAPI, no external credentials). AIS-02/05 (Copyleaks/
@@ -131,11 +151,23 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
     // whatever naming policy the caller's JsonSerializerOptions happens to apply.
     private sealed record SyllabusExtractionRequestBody([property: JsonPropertyName("pdf_base64")] string PdfBase64);
 
+    private sealed record SyllabusChapterExtractionBody(
+        [property: JsonPropertyName("chapter_number")] int ChapterNumber,
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("description")] string? Description);
+
+    private sealed record SyllabusUnitExtractionBody(
+        [property: JsonPropertyName("unit_number")] int UnitNumber,
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("description")] string? Description,
+        [property: JsonPropertyName("chapters")] List<SyllabusChapterExtractionBody>? Chapters);
+
     private sealed record SyllabusExtractionResponseBody(
         [property: JsonPropertyName("course_code")] string? CourseCode,
         [property: JsonPropertyName("course_name")] string? CourseName,
-        [property: JsonPropertyName("instructor_name")] string? InstructorName,
         [property: JsonPropertyName("credits")] double? Credits,
+        [property: JsonPropertyName("textbooks")] List<string>? Textbooks,
+        [property: JsonPropertyName("units")] List<SyllabusUnitExtractionBody>? Units,
         [property: JsonPropertyName("confidence_notes")] List<string>? ConfidenceNotes);
 
     public async Task<SyllabusExtractionResult> ExtractSyllabusAsync(byte[] pdfBytes, CancellationToken ct = default)
@@ -146,10 +178,22 @@ public class AiServicesClient(HttpClient http) : IAiServicesClient
         {
             throw new SyllabusExtractionInvalidPdfException();
         }
+        if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>(cancellationToken: ct);
+            var message = problem is not null && problem.TryGetValue("detail", out var detail)
+                ? detail?.ToString() ?? "Syllabus extraction failed."
+                : "Syllabus extraction failed.";
+            throw new SyllabusExtractionFailedException(message);
+        }
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<SyllabusExtractionResponseBody>(cancellationToken: ct)
             ?? throw new InvalidOperationException("AI Services returned an empty syllabus extraction response.");
+        var units = (result.Units ?? []).Select(u => new SyllabusUnitExtractionResult(
+            u.UnitNumber, u.Title, u.Description,
+            (u.Chapters ?? []).Select(c => new SyllabusChapterExtractionResult(c.ChapterNumber, c.Title, c.Description)).ToList()))
+            .ToList();
         return new SyllabusExtractionResult(
-            result.CourseCode, result.CourseName, result.InstructorName, result.Credits, result.ConfidenceNotes ?? []);
+            result.CourseCode, result.CourseName, result.Credits, result.Textbooks ?? [], units, result.ConfidenceNotes ?? []);
     }
 }

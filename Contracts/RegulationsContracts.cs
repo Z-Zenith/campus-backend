@@ -67,3 +67,17 @@ public record CurriculumChapterDto(Guid Id, Guid UnitId, int ChapterNumber, stri
 public record CreateCurriculumChapterRequest(int ChapterNumber, string Title, string? Description);
 
 public record UpdateCurriculumChapterRequest(int ChapterNumber, string Title, string? Description);
+
+// AIS-06 "confirm and save": the admin has reviewed (and possibly edited) an LLM syllabus
+// extraction and is now asking to persist it. All-or-nothing - if any unit/chapter number
+// collides with an existing row or with another entry in this same request, nothing is
+// created; there is no partial-import state to reconcile.
+public record CreateChapterFromExtractionRequest(int ChapterNumber, string Title, string? Description);
+
+public record CreateUnitFromExtractionRequest(
+    int UnitNumber, string Title, string? Description, List<CreateChapterFromExtractionRequest> Chapters);
+
+public record CreateUnitsFromExtractionRequest(List<CreateUnitFromExtractionRequest> Units);
+
+public record CurriculumUnitWithChaptersDto(
+    Guid Id, Guid OfferingId, int UnitNumber, string Title, string? Description, List<CurriculumChapterDto> Chapters);

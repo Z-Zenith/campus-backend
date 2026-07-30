@@ -4228,6 +4228,75 @@
         }
       }
     },
+    "/api/v1/regulations/offerings/{offeringId}/units/from-extraction": {
+      "post": {
+        "tags": [
+          "Regulations"
+        ],
+        "parameters": [
+          {
+            "name": "offeringId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUnitsFromExtractionRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUnitsFromExtractionRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUnitsFromExtractionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CurriculumUnitWithChaptersDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CurriculumUnitWithChaptersDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CurriculumUnitWithChaptersDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/reports": {
       "post": {
         "tags": [
@@ -6897,6 +6966,33 @@
           }
         }
       },
+      "CreateChapterFromExtractionRequest": {
+        "required": [
+          "chapterNumber",
+          "title",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "chapterNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "CreateCodeProjectRequest": {
         "required": [
           "name",
@@ -7573,6 +7669,54 @@
           }
         }
       },
+      "CreateUnitFromExtractionRequest": {
+        "required": [
+          "unitNumber",
+          "title",
+          "description",
+          "chapters"
+        ],
+        "type": "object",
+        "properties": {
+          "unitNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateChapterFromExtractionRequest"
+            }
+          }
+        }
+      },
+      "CreateUnitsFromExtractionRequest": {
+        "required": [
+          "units"
+        ],
+        "type": "object",
+        "properties": {
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateUnitFromExtractionRequest"
+            }
+          }
+        }
+      },
       "CreateUserRequest": {
         "required": [
           "collegeId",
@@ -7711,6 +7855,50 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "CurriculumUnitWithChaptersDto": {
+        "required": [
+          "id",
+          "offeringId",
+          "unitNumber",
+          "title",
+          "description",
+          "chapters"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offeringId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "unitNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurriculumChapterDto"
+            }
           }
         }
       },
@@ -9922,12 +10110,40 @@
           }
         }
       },
+      "SyllabusChapterExtractionDto": {
+        "required": [
+          "chapterNumber",
+          "title",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "chapterNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "SyllabusExtractionResponseDto": {
         "required": [
           "courseCode",
           "courseName",
-          "instructorName",
           "credits",
+          "textbooks",
+          "units",
           "confidenceNotes"
         ],
         "type": "object",
@@ -9944,12 +10160,6 @@
               "string"
             ]
           },
-          "instructorName": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
           "credits": {
             "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
             "type": [
@@ -9959,10 +10169,56 @@
             ],
             "format": "double"
           },
+          "textbooks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyllabusUnitExtractionDto"
+            }
+          },
           "confidenceNotes": {
             "type": "array",
             "items": {
               "type": "string"
+            }
+          }
+        }
+      },
+      "SyllabusUnitExtractionDto": {
+        "required": [
+          "unitNumber",
+          "title",
+          "description",
+          "chapters"
+        ],
+        "type": "object",
+        "properties": {
+          "unitNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "chapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyllabusChapterExtractionDto"
             }
           }
         }

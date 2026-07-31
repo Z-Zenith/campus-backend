@@ -200,6 +200,31 @@ public class MessagingControllerTests
         Assert.IsType<ForbidResult>(result.Result);
     }
 
+    // #11: a thread's student and teacher aren't guaranteed to share a college — a
+    // non-admin caller can self-initiate a thread with a counterpart at a different college
+    // (CreateThread only rejects a cross-college pairing when the caller is AdminTier).
+    // Checking only the student's college here would wrongly admit an Admin who happens to
+    // share the student's college but not the teacher's.
+    [Fact]
+    public async Task ListMessages_ForbidsAdmin_WhenOnlyStudentSharesCallersCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, otherCollegeId);
+        var admin = NewUser(AccountType.AdminTier, collegeId);
+        db.Users.AddRange(student, teacher, admin);
+        var thread = new MessageThread { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, CreatedAt = DateTime.UtcNow };
+        db.MessageThreads.Add(thread);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.ListMessages(thread.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
     // #159: ListMessages should paginate rather than always returning every message ever
     // sent in a thread.
     [Fact]

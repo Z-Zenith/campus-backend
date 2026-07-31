@@ -268,8 +268,15 @@ public class MessagingController(AppDbContext db) : ControllerBase
         return Ok(new MarkNotificationReadResponse(notification.Id, notification.ReadAt!.Value));
     }
 
+    // #11: CreateThread only rejects a cross-college pairing when the caller is
+    // AdminTier — a student or teacher can self-initiate a thread with a counterpart at a
+    // different college (no same-college check applies to them), so an existing thread's
+    // student and teacher are not guaranteed to share a college. Checking only one side here
+    // would let an Admin who shares a college with just the student (not the teacher) read a
+    // thread involving that other college — the same IDOR class this fix is meant to close.
     private async Task<bool> IsThreadInCollegeAsync(MessageThread thread, Guid collegeId) =>
-        await db.Users.AnyAsync(u => u.Id == thread.StudentId && u.CollegeId == collegeId);
+        await db.Users.AnyAsync(u => u.Id == thread.StudentId && u.CollegeId == collegeId)
+        && await db.Users.AnyAsync(u => u.Id == thread.TeacherId && u.CollegeId == collegeId);
 
     private static MessageThreadResponse ToResponse(MessageThread thread) =>
         new(thread.Id, thread.StudentId, thread.TeacherId, thread.CreatedAt);

@@ -16,10 +16,10 @@ public class AssignmentsControllerTests
     private static AppDbContext NewDb() => new(
         new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private static User NewUser(AccountType accountType) => new()
+    private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
     {
         Id = Guid.NewGuid(),
-        CollegeId = Guid.NewGuid(),
+        CollegeId = collegeId ?? Guid.NewGuid(),
         Identifier = $"user-{Guid.NewGuid():N}",
         PasswordHash = "hash",
         FullName = "Test User",
@@ -297,6 +297,55 @@ public class AssignmentsControllerTests
         Assert.IsType<SubmissionDto>(ok.Value);
     }
 
+    // #11: Create previously let any AdminTier caller bypass the teacher-ownership
+    // check unconditionally — an Admin at a different college than the subject must not be
+    // able to create assignments for it.
+    [Fact]
+    public async Task Create_ForbidsAdmin_WhenSubjectIsAtADifferentCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, otherCollegeId);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id };
+        db.Users.AddRange(teacher, admin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var request = new CreateAssignmentRequest(subject.Id, "HW1", null, AssignmentType.FileUpload, DateTime.UtcNow.AddDays(1), DateTime.UtcNow.AddHours(-1), DateTime.UtcNow.AddHours(1), null);
+        var result = await controller.Create(request);
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.Assignments.ToListAsync());
+    }
+
+    // #11: same college — an Admin should still be able to create assignments for a
+    // subject taught at their own institution, even if they're not its assigned teacher.
+    [Fact]
+    public async Task Create_AllowsAdmin_WhenSubjectIsAtTheSameCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, collegeId);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id };
+        db.Users.AddRange(teacher, admin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var request = new CreateAssignmentRequest(subject.Id, "HW1", null, AssignmentType.FileUpload, DateTime.UtcNow.AddDays(1), DateTime.UtcNow.AddHours(-1), DateTime.UtcNow.AddHours(1), null);
+        var result = await controller.Create(request);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+    }
+
     // #135 (IDOR): same gap as Submit(), on the auto-submit path used by the desktop app's
     // exit-detection trigger (SDA-11).
     [Fact]
@@ -376,6 +425,57 @@ public class AssignmentsControllerTests
 
         Assert.IsType<OkObjectResult>(result.Result);
         Assert.Empty(await db.CopyCheckFlags.ToListAsync());
+    }
+
+    // #11: CanAccessAssignmentAsync (shared by CopyCheck, RequestPlagiarismCheck,
+    // PlagiarismReport, AutogradeSuggestion, and Grade) previously let any AdminTier caller
+    // bypass the teacher-ownership check unconditionally — an Admin at a different college
+    // than the assignment's subject must not be able to trigger a copy-check on it.
+    [Fact]
+    public async Task CopyCheck_ForbidsAdmin_WhenAssignmentSubjectIsAtADifferentCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, otherCollegeId);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id };
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        db.Users.AddRange(teacher, admin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Assignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.CopyCheck(assignment.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // #11: same college — an Admin should still be able to trigger a copy-check for
+    // an assignment at their own institution, even if they're not its assigned teacher.
+    [Fact]
+    public async Task CopyCheck_AllowsAdmin_WhenAssignmentSubjectIsAtTheSameCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var admin = NewUser(AccountType.AdminTier, collegeId);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = collegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro", TeacherId = teacher.Id };
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        db.Users.AddRange(teacher, admin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Assignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin, new FakeAiServicesClient());
+        var result = await controller.CopyCheck(assignment.Id);
+
+        Assert.IsType<OkObjectResult>(result.Result);
     }
 
     // AIS-02

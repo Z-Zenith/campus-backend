@@ -31,10 +31,6 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-    CREATE TYPE group_type AS ENUM ('class', 'subject_section', 'club', 'teacher_only');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
     CREATE TYPE doc_type AS ENUM ('pdf', 'pptx', 'docx');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -444,43 +440,129 @@ CREATE TABLE IF NOT EXISTS external_marks (
 );
 
 -- ─── 1.6 Community ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS groups (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
-    type        group_type NOT NULL,
-    name        text NOT NULL,
-    created_by  uuid REFERENCES users(id) ON DELETE SET NULL,
-    section_id  uuid REFERENCES sections(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_groups_college ON groups (college_id);
+-- Redesigned (2026-07-30): the old flat `groups` table (a single table discriminated by a
+-- `type` column: class | subject_section | club | teacher_only) is split into three genuinely
+-- separate concepts per explicit user direction ("separate the clubs and classroom chats...
+-- no messy schema"). `subject_section` was a reserved-but-never-implemented enum value in the
+-- old design; classroom_discussions below is its real implementation. `class` (whole-section,
+-- every subject) is retired outright in favor of the narrower per-(section, subject) scope.
+-- `teacher_only` is all that's left of the old `groups` table, so it's kept under that name
+-- rather than invented a new one, with its now-single-purpose `type` column dropped.
 
-CREATE TABLE IF NOT EXISTS group_members (
+-- Clubs: opt-in orgs. Led by a faculty lead (teacher) and a student incharge (officer),
+-- alongside regular members (club_members below) - mirrors real student-org structure
+-- (faculty advisor + officer + members) rather than a flat membership list. Direct FK
+-- columns for the two leadership roles, not RoleBinding - a club has exactly one of each,
+-- not an open grant list, same reasoning as departments.hod_role_binding_id being a direct
+-- FK rather than routed through the RBAC layer.
+CREATE TABLE IF NOT EXISTS clubs (
+    id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    college_id                uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
+    name                      text NOT NULL,
+    description               text,
+    faculty_lead_user_id      uuid REFERENCES users(id) ON DELETE SET NULL,
+    student_incharge_user_id  uuid REFERENCES users(id) ON DELETE SET NULL,
+    -- Club-authored HTML/CSS/JS "home site" shown on the club's discovery page. Rendered
+    -- client-side inside a sandboxed iframe (no allow-same-origin, strict CSP) - never
+    -- trust this column's contents as safe to inline into the app's own DOM.
+    home_site_html            text,
+    created_by                uuid REFERENCES users(id) ON DELETE SET NULL,
+    created_at                timestamptz NOT NULL DEFAULT now(),
+    updated_at                timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_clubs_college ON clubs (college_id);
+
+CREATE TABLE IF NOT EXISTS club_members (
     id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id  uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    club_id   uuid NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
     user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     joined_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (group_id, user_id)
+    UNIQUE (club_id, user_id)
 );
+CREATE INDEX IF NOT EXISTS idx_club_members_user ON club_members (user_id);
 
-CREATE TABLE IF NOT EXISTS group_posts (
+CREATE TABLE IF NOT EXISTS club_posts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id   uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    club_id    uuid NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
     author_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     content    text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_group_posts_group
-    ON group_posts (group_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_club_posts_club
+    ON club_posts (club_id, created_at DESC);
 
+-- Classroom discussions: one per (section, subject) - e.g. "3rd Year CSE-A - Data
+-- Structures" - auto-provisioned from teacher_section_assignments, one level narrower than
+-- the old whole-section Class group (which spanned every subject a section takes). No
+-- separate membership table: who can see/post in one is always derivable from
+-- section_enrollments (the section's students) + teacher_section_assignments (the subject's
+-- teacher for that section) for the current semester, so a stored membership row would just
+-- be denormalized duplication of data that already exists and can go stale.
+CREATE TABLE IF NOT EXISTS classroom_discussions (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    section_id uuid NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+    subject_id uuid NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (section_id, subject_id)
+);
+
+CREATE TABLE IF NOT EXISTS classroom_discussion_posts (
+    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    classroom_discussion_id  uuid NOT NULL REFERENCES classroom_discussions(id) ON DELETE CASCADE,
+    author_id                uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content                  text NOT NULL,
+    created_at               timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_discussion_posts_discussion
+    ON classroom_discussion_posts (classroom_discussion_id, created_at DESC);
+
+-- Staff groups: all that's left of the old flat `groups` table once Class/SubjectSection/
+-- Club moved out above - a teacher-only space (e.g. "Staff Room"), kept under its own name
+-- rather than folded into either of the above since it isn't club-shaped (no faculty-
+-- lead/student-incharge structure) or classroom-shaped (not scoped to a section+subject).
+CREATE TABLE IF NOT EXISTS staff_groups (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    college_id  uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    created_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_staff_groups_college ON staff_groups (college_id);
+
+CREATE TABLE IF NOT EXISTS staff_group_members (
+    id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    staff_group_id  uuid NOT NULL REFERENCES staff_groups(id) ON DELETE CASCADE,
+    user_id   uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (staff_group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_staff_group_members_user ON staff_group_members (user_id);
+
+CREATE TABLE IF NOT EXISTS staff_group_posts (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    staff_group_id  uuid NOT NULL REFERENCES staff_groups(id) ON DELETE CASCADE,
+    author_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content         text NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_staff_group_posts_group
+    ON staff_group_posts (staff_group_id, created_at DESC);
+
+-- Materials can attach to a subject and/or exactly one of the three community spaces above.
 CREATE TABLE IF NOT EXISTS materials (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    subject_id   uuid REFERENCES subjects(id) ON DELETE SET NULL,
-    group_id     uuid REFERENCES groups(id) ON DELETE SET NULL,
-    uploaded_by  uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-    file_url     text NOT NULL,
-    title        text NOT NULL,
-    uploaded_at  timestamptz NOT NULL DEFAULT now(),
-    CHECK (subject_id IS NOT NULL OR group_id IS NOT NULL)  -- attached to one or both
+    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject_id               uuid REFERENCES subjects(id) ON DELETE SET NULL,
+    club_id                  uuid REFERENCES clubs(id) ON DELETE SET NULL,
+    classroom_discussion_id  uuid REFERENCES classroom_discussions(id) ON DELETE SET NULL,
+    staff_group_id           uuid REFERENCES staff_groups(id) ON DELETE SET NULL,
+    uploaded_by              uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    file_url                 text NOT NULL,
+    title                    text NOT NULL,
+    uploaded_at              timestamptz NOT NULL DEFAULT now(),
+    CHECK (
+        subject_id IS NOT NULL OR club_id IS NOT NULL
+        OR classroom_discussion_id IS NOT NULL OR staff_group_id IS NOT NULL
+    )
 );
 
 -- ─── 1.7 Calendar & Events ────────────────────────────────────────────────────

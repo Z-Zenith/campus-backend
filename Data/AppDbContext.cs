@@ -54,11 +54,21 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<FeeRecord> FeeRecords { get; set; }
 
-    public virtual DbSet<Group> Groups { get; set; }
+    public virtual DbSet<Club> Clubs { get; set; }
 
-    public virtual DbSet<GroupMember> GroupMembers { get; set; }
+    public virtual DbSet<ClubMember> ClubMembers { get; set; }
 
-    public virtual DbSet<GroupPost> GroupPosts { get; set; }
+    public virtual DbSet<ClubPost> ClubPosts { get; set; }
+
+    public virtual DbSet<ClassroomDiscussion> ClassroomDiscussions { get; set; }
+
+    public virtual DbSet<ClassroomDiscussionPost> ClassroomDiscussionPosts { get; set; }
+
+    public virtual DbSet<StaffGroup> StaffGroups { get; set; }
+
+    public virtual DbSet<StaffGroupMember> StaffGroupMembers { get; set; }
+
+    public virtual DbSet<StaffGroupPost> StaffGroupPosts { get; set; }
 
     public virtual DbSet<InternalMark> InternalMarks { get; set; }
 
@@ -138,7 +148,6 @@ public partial class AppDbContext : DbContext
             .HasPostgresEnum<EventType>()
             .HasPostgresEnum<ExamType>()
             .HasPostgresEnum<FeeStatus>()
-            .HasPostgresEnum<GroupType>()
             .HasPostgresEnum<NotificationType>()
             .HasPostgresEnum<OcrStatus>()
             .HasPostgresEnum<ScopeKind>()
@@ -395,46 +404,116 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.Student).WithMany(p => p.FeeRecords).HasConstraintName("fee_records_student_id_fkey");
         });
 
-        modelBuilder.Entity<Group>(entity =>
+        modelBuilder.Entity<Club>(entity =>
         {
-            entity.HasKey(e => e.Id).HasName("groups_pkey");
-
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.Type).HasColumnType("group_type");
-
-            entity.HasOne(d => d.College).WithMany(p => p.Groups).HasConstraintName("groups_college_id_fkey");
-
-            entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.Groups)
-                .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("groups_created_by_fkey");
-
-            entity.HasOne(d => d.Section).WithMany(p => p.Groups)
-                .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("groups_section_id_fkey");
-        });
-
-        modelBuilder.Entity<GroupMember>(entity =>
-        {
-            entity.HasKey(e => e.Id).HasName("group_members_pkey");
-
-            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
-            entity.Property(e => e.JoinedAt).HasDefaultValueSql("now()");
-
-            entity.HasOne(d => d.Group).WithMany(p => p.GroupMembers).HasConstraintName("group_members_group_id_fkey");
-
-            entity.HasOne(d => d.User).WithMany(p => p.GroupMembers).HasConstraintName("group_members_user_id_fkey");
-        });
-
-        modelBuilder.Entity<GroupPost>(entity =>
-        {
-            entity.HasKey(e => e.Id).HasName("group_posts_pkey");
+            entity.HasKey(e => e.Id).HasName("clubs_pkey");
 
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
 
-            entity.HasOne(d => d.Author).WithMany(p => p.GroupPosts).HasConstraintName("group_posts_author_id_fkey");
+            entity.HasOne(d => d.College).WithMany(p => p.Clubs).HasConstraintName("clubs_college_id_fkey");
 
-            entity.HasOne(d => d.Group).WithMany(p => p.GroupPosts).HasConstraintName("group_posts_group_id_fkey");
+            entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.ClubsCreated)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("clubs_created_by_fkey");
+
+            entity.HasOne(d => d.FacultyLead).WithMany(p => p.ClubsAsFacultyLead)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("clubs_faculty_lead_user_id_fkey");
+
+            entity.HasOne(d => d.StudentIncharge).WithMany(p => p.ClubsAsStudentIncharge)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("clubs_student_incharge_user_id_fkey");
+        });
+
+        modelBuilder.Entity<ClubMember>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("club_members_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.JoinedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Club).WithMany(p => p.ClubMembers).HasConstraintName("club_members_club_id_fkey");
+
+            entity.HasOne(d => d.User).WithMany(p => p.ClubMemberships).HasConstraintName("club_members_user_id_fkey");
+        });
+
+        modelBuilder.Entity<ClubPost>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("club_posts_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Author).WithMany(p => p.ClubPosts).HasConstraintName("club_posts_author_id_fkey");
+
+            entity.HasOne(d => d.Club).WithMany(p => p.ClubPosts).HasConstraintName("club_posts_club_id_fkey");
+        });
+
+        modelBuilder.Entity<ClassroomDiscussion>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("classroom_discussions_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Section).WithMany(p => p.ClassroomDiscussions)
+                .HasConstraintName("classroom_discussions_section_id_fkey");
+
+            entity.HasOne(d => d.Subject).WithMany(p => p.ClassroomDiscussions)
+                .HasConstraintName("classroom_discussions_subject_id_fkey");
+        });
+
+        modelBuilder.Entity<ClassroomDiscussionPost>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("classroom_discussion_posts_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Author).WithMany(p => p.ClassroomDiscussionPosts)
+                .HasConstraintName("classroom_discussion_posts_author_id_fkey");
+
+            entity.HasOne(d => d.ClassroomDiscussion).WithMany(p => p.ClassroomDiscussionPosts)
+                .HasConstraintName("classroom_discussion_posts_classroom_discussion_id_fkey");
+        });
+
+        modelBuilder.Entity<StaffGroup>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("staff_groups_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.College).WithMany(p => p.StaffGroups).HasConstraintName("staff_groups_college_id_fkey");
+
+            entity.HasOne(d => d.CreatedByNavigation).WithMany(p => p.StaffGroupsCreated)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("staff_groups_created_by_fkey");
+        });
+
+        modelBuilder.Entity<StaffGroupMember>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("staff_group_members_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.JoinedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.StaffGroup).WithMany(p => p.StaffGroupMembers).HasConstraintName("staff_group_members_staff_group_id_fkey");
+
+            entity.HasOne(d => d.User).WithMany(p => p.StaffGroupMemberships).HasConstraintName("staff_group_members_user_id_fkey");
+        });
+
+        modelBuilder.Entity<StaffGroupPost>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("staff_group_posts_pkey");
+
+            entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+
+            entity.HasOne(d => d.Author).WithMany(p => p.StaffGroupPosts).HasConstraintName("staff_group_posts_author_id_fkey");
+
+            entity.HasOne(d => d.StaffGroup).WithMany(p => p.StaffGroupPosts).HasConstraintName("staff_group_posts_staff_group_id_fkey");
         });
 
         modelBuilder.Entity<InternalMark>(entity =>
@@ -463,9 +542,17 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.Id).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.UploadedAt).HasDefaultValueSql("now()");
 
-            entity.HasOne(d => d.Group).WithMany(p => p.Materials)
+            entity.HasOne(d => d.Club).WithMany(p => p.Materials)
                 .OnDelete(DeleteBehavior.SetNull)
-                .HasConstraintName("materials_group_id_fkey");
+                .HasConstraintName("materials_club_id_fkey");
+
+            entity.HasOne(d => d.ClassroomDiscussion).WithMany(p => p.Materials)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("materials_classroom_discussion_id_fkey");
+
+            entity.HasOne(d => d.StaffGroup).WithMany(p => p.Materials)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("materials_staff_group_id_fkey");
 
             entity.HasOne(d => d.Subject).WithMany(p => p.Materials)
                 .OnDelete(DeleteBehavior.SetNull)

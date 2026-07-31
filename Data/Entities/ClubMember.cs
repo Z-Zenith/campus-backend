@@ -1,21 +1,21 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Data.Entities;
 
-[Table("group_members")]
-[Index("GroupId", "UserId", Name = "group_members_group_id_user_id_key", IsUnique = true)]
-public partial class GroupMember
+[Table("club_members")]
+[Index("UserId", Name = "idx_club_members_user")]
+[Index("ClubId", "UserId", Name = "club_members_club_id_user_id_key", IsUnique = true)]
+public partial class ClubMember
 {
     [Key]
     [Column("id")]
     public Guid Id { get; set; }
 
-    [Column("group_id")]
-    public Guid GroupId { get; set; }
+    [Column("club_id")]
+    public Guid ClubId { get; set; }
 
     [Column("user_id")]
     public Guid UserId { get; set; }
@@ -23,11 +23,11 @@ public partial class GroupMember
     [Column("joined_at")]
     public DateTime JoinedAt { get; set; }
 
-    [ForeignKey("GroupId")]
-    [InverseProperty("GroupMembers")]
-    public virtual Group Group { get; set; } = null!;
+    [ForeignKey("ClubId")]
+    [InverseProperty("ClubMembers")]
+    public virtual Club Club { get; set; } = null!;
 
     [ForeignKey("UserId")]
-    [InverseProperty("GroupMembers")]
+    [InverseProperty("ClubMemberships")]
     public virtual User User { get; set; } = null!;
 }

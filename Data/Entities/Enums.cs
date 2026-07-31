@@ -8,8 +8,6 @@ public enum AttendanceStatus { Present, Absent, Late }
 
 public enum AssignmentType { Code, Quiz, Essay, FileUpload }
 
-public enum GroupType { Class, SubjectSection, Club, TeacherOnly }
-
 public enum DocType { Pdf, Pptx, Docx }
 
 public enum NotificationType

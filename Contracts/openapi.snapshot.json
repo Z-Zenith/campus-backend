@@ -1372,6 +1372,851 @@
         }
       }
     },
+    "/api/v1/classroom-discussions/provision": {
+      "post": {
+        "tags": [
+          "ClassroomDiscussions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionClassroomDiscussionsResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionClassroomDiscussionsResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionClassroomDiscussionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classroom-discussions/mine": {
+      "get": {
+        "tags": [
+          "ClassroomDiscussions"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classroom-discussions/{id}/posts": {
+      "post": {
+        "tags": [
+          "ClassroomDiscussions"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassroomDiscussionPostRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassroomDiscussionPostRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClassroomDiscussionPostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "ClassroomDiscussions"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClassroomDiscussionPostDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classroom-discussions/{id}/materials": {
+      "get": {
+        "tags": [
+          "ClassroomDiscussions"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs": {
+      "get": {
+        "tags": [
+          "Clubs"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Clubs"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/mine": {
+      "get": {
+        "tags": [
+          "Clubs"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}": {
+      "put": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/home-site": {
+      "put": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubHomeSiteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubHomeSiteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClubHomeSiteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/join": {
+      "post": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/leave": {
+      "post": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/members": {
+      "get": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubMemberDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubMemberDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubMemberDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddClubMemberRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddClubMemberRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddClubMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubMemberDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/members/{userId}": {
+      "delete": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/posts": {
+      "post": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubPostRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubPostRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClubPostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubPostDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubPostDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClubPostDto"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubPostDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubPostDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClubPostDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clubs/{id}/materials": {
+      "get": {
+        "tags": [
+          "Clubs"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaterialDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/code/run": {
       "post": {
         "tags": [
@@ -1627,36 +2472,7 @@
         }
       }
     },
-    "/api/v1/groups/provision-class-groups": {
-      "post": {
-        "tags": [
-          "Community"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionClassGroupsResponse"
-                }
-              },
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionClassGroupsResponse"
-                }
-              },
-              "text/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionClassGroupsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/groups": {
+    "/api/v1/staff-groups": {
       "post": {
         "tags": [
           "Community"
@@ -1665,17 +2481,17 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateGroupRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupRequest"
               }
             },
             "text/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateGroupRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupRequest"
               }
             },
             "application/*+json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateGroupRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupRequest"
               }
             }
           },
@@ -1687,17 +2503,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupDto"
+                  "$ref": "#/components/schemas/StaffGroupDto"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupDto"
+                  "$ref": "#/components/schemas/StaffGroupDto"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupDto"
+                  "$ref": "#/components/schemas/StaffGroupDto"
                 }
               }
             }
@@ -1714,17 +2530,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               }
             }
@@ -1732,7 +2548,7 @@
         }
       }
     },
-    "/api/v1/groups/{id}/members": {
+    "/api/v1/staff-groups/{id}/members": {
       "get": {
         "tags": [
           "Community"
@@ -1756,7 +2572,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupMemberDto"
+                    "$ref": "#/components/schemas/StaffGroupMemberDto"
                   }
                 }
               },
@@ -1764,7 +2580,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupMemberDto"
+                    "$ref": "#/components/schemas/StaffGroupMemberDto"
                   }
                 }
               },
@@ -1772,7 +2588,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupMemberDto"
+                    "$ref": "#/components/schemas/StaffGroupMemberDto"
                   }
                 }
               }
@@ -1799,17 +2615,17 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddGroupMemberRequest"
+                "$ref": "#/components/schemas/AddStaffGroupMemberRequest"
               }
             },
             "text/json": {
               "schema": {
-                "$ref": "#/components/schemas/AddGroupMemberRequest"
+                "$ref": "#/components/schemas/AddStaffGroupMemberRequest"
               }
             },
             "application/*+json": {
               "schema": {
-                "$ref": "#/components/schemas/AddGroupMemberRequest"
+                "$ref": "#/components/schemas/AddStaffGroupMemberRequest"
               }
             }
           },
@@ -1821,17 +2637,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupMemberDto"
+                  "$ref": "#/components/schemas/StaffGroupMemberDto"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupMemberDto"
+                  "$ref": "#/components/schemas/StaffGroupMemberDto"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupMemberDto"
+                  "$ref": "#/components/schemas/StaffGroupMemberDto"
                 }
               }
             }
@@ -1839,7 +2655,7 @@
         }
       }
     },
-    "/api/v1/groups/{id}/members/{userId}": {
+    "/api/v1/staff-groups/{id}/members/{userId}": {
       "delete": {
         "tags": [
           "Community"
@@ -1871,7 +2687,7 @@
         }
       }
     },
-    "/api/v1/groups/mine": {
+    "/api/v1/staff-groups/mine": {
       "get": {
         "tags": [
           "Community"
@@ -1882,17 +2698,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MyGroupsResponse"
+                  "$ref": "#/components/schemas/MyStaffGroupsResponse"
                 }
               }
             }
@@ -1900,7 +2716,7 @@
         }
       }
     },
-    "/api/v1/groups/{id}/posts": {
+    "/api/v1/staff-groups/{id}/posts": {
       "post": {
         "tags": [
           "Community"
@@ -1920,17 +2736,17 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreatePostRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupPostRequest"
               }
             },
             "text/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreatePostRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupPostRequest"
               }
             },
             "application/*+json": {
               "schema": {
-                "$ref": "#/components/schemas/CreatePostRequest"
+                "$ref": "#/components/schemas/CreateStaffGroupPostRequest"
               }
             }
           },
@@ -1942,17 +2758,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupPostDto"
+                  "$ref": "#/components/schemas/StaffGroupPostDto"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupPostDto"
+                  "$ref": "#/components/schemas/StaffGroupPostDto"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GroupPostDto"
+                  "$ref": "#/components/schemas/StaffGroupPostDto"
                 }
               }
             }
@@ -1982,7 +2798,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupPostDto"
+                    "$ref": "#/components/schemas/StaffGroupPostDto"
                   }
                 }
               },
@@ -1990,7 +2806,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupPostDto"
+                    "$ref": "#/components/schemas/StaffGroupPostDto"
                   }
                 }
               },
@@ -1998,7 +2814,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/GroupPostDto"
+                    "$ref": "#/components/schemas/StaffGroupPostDto"
                   }
                 }
               }
@@ -2007,7 +2823,7 @@
         }
       }
     },
-    "/api/v1/groups/{id}/materials": {
+    "/api/v1/staff-groups/{id}/materials": {
       "get": {
         "tags": [
           "Community"
@@ -6201,6 +7017,18 @@
         ],
         "type": "string"
       },
+      "AddClubMemberRequest": {
+        "required": [
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "AddDefaultSitesResponse": {
         "required": [
           "added",
@@ -6222,7 +7050,7 @@
           }
         }
       },
-      "AddGroupMemberRequest": {
+      "AddStaffGroupMemberRequest": {
         "required": [
           "userId"
         ],
@@ -6698,6 +7526,197 @@
           }
         }
       },
+      "ClassroomDiscussionDto": {
+        "required": [
+          "id",
+          "sectionId",
+          "sectionName",
+          "subjectId",
+          "subjectCode",
+          "subjectName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sectionName": {
+            "type": "string"
+          },
+          "subjectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectCode": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          }
+        }
+      },
+      "ClassroomDiscussionPostDto": {
+        "required": [
+          "id",
+          "classroomDiscussionId",
+          "authorId",
+          "content",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "classroomDiscussionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ClubDto": {
+        "required": [
+          "id",
+          "name",
+          "description",
+          "facultyLeadUserId",
+          "facultyLeadFullName",
+          "studentInchargeUserId",
+          "studentInchargeFullName",
+          "homeSiteHtml",
+          "memberCount"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "facultyLeadUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "facultyLeadFullName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "studentInchargeUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "studentInchargeFullName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "homeSiteHtml": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "memberCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "ClubMemberDto": {
+        "required": [
+          "id",
+          "userId",
+          "userFullName",
+          "joinedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userFullName": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ClubPostDto": {
+        "required": [
+          "id",
+          "clubId",
+          "authorId",
+          "content",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clubId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "CodeFileDto": {
         "required": [
           "path",
@@ -6993,6 +8012,62 @@
           }
         }
       },
+      "CreateClassroomDiscussionPostRequest": {
+        "required": [
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateClubPostRequest": {
+        "required": [
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateClubRequest": {
+        "required": [
+          "name",
+          "description",
+          "facultyLeadUserId",
+          "studentInchargeUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "facultyLeadUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "studentInchargeUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
       "CreateCodeProjectRequest": {
         "required": [
           "name",
@@ -7261,29 +8336,6 @@
           }
         }
       },
-      "CreateGroupRequest": {
-        "required": [
-          "name",
-          "type",
-          "sectionId"
-        ],
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "type": {
-            "$ref": "#/components/schemas/GroupType"
-          },
-          "sectionId": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "format": "uuid"
-          }
-        }
-      },
       "CreateInternalMarkRequest": {
         "required": [
           "studentId",
@@ -7327,7 +8379,9 @@
           "title",
           "fileUrl",
           "subjectId",
-          "groupId"
+          "clubId",
+          "classroomDiscussionId",
+          "staffGroupId"
         ],
         "type": "object",
         "properties": {
@@ -7344,7 +8398,21 @@
             ],
             "format": "uuid"
           },
-          "groupId": {
+          "clubId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "classroomDiscussionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "staffGroupId": {
             "type": [
               "null",
               "string"
@@ -7486,17 +8554,6 @@
           }
         }
       },
-      "CreatePostRequest": {
-        "required": [
-          "content"
-        ],
-        "type": "object",
-        "properties": {
-          "content": {
-            "type": "string"
-          }
-        }
-      },
       "CreateRegulationRequest": {
         "required": [
           "departmentId",
@@ -7585,6 +8642,28 @@
               "string"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "CreateStaffGroupPostRequest": {
+        "required": [
+          "content"
+        ],
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateStaffGroupRequest": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -8225,100 +9304,6 @@
           }
         }
       },
-      "GroupDto": {
-        "required": [
-          "id",
-          "name",
-          "type",
-          "sectionId"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          },
-          "sectionId": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "format": "uuid"
-          }
-        }
-      },
-      "GroupMemberDto": {
-        "required": [
-          "id",
-          "userId",
-          "userFullName",
-          "joinedAt"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "userId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "userFullName": {
-            "type": "string"
-          },
-          "joinedAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "GroupPostDto": {
-        "required": [
-          "id",
-          "groupId",
-          "authorId",
-          "content",
-          "createdAt"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "groupId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "authorId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "content": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "GroupType": {
-        "enum": [
-          "Class",
-          "SubjectSection",
-          "Club",
-          "TeacherOnly"
-        ],
-        "type": "string"
-      },
       "IFormFile": {
         "type": "string",
         "format": "binary"
@@ -8621,7 +9606,9 @@
           "title",
           "fileUrl",
           "subjectId",
-          "groupId",
+          "clubId",
+          "classroomDiscussionId",
+          "staffGroupId",
           "uploadedBy",
           "uploadedAt"
         ],
@@ -8644,7 +9631,21 @@
             ],
             "format": "uuid"
           },
-          "groupId": {
+          "clubId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "classroomDiscussionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "staffGroupId": {
             "type": [
               "null",
               "string"
@@ -8741,20 +9742,6 @@
           }
         }
       },
-      "MyGroupsResponse": {
-        "required": [
-          "groups"
-        ],
-        "type": "object",
-        "properties": {
-          "groups": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GroupDto"
-            }
-          }
-        }
-      },
       "MyMarksResponse": {
         "required": [
           "internalMarks",
@@ -8772,6 +9759,20 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ExternalMarkDto"
+            }
+          }
+        }
+      },
+      "MyStaffGroupsResponse": {
+        "required": [
+          "staffGroups"
+        ],
+        "type": "object",
+        "properties": {
+          "staffGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaffGroupDto"
             }
           }
         }
@@ -9200,22 +10201,13 @@
           }
         }
       },
-      "ProvisionClassGroupsResponse": {
+      "ProvisionClassroomDiscussionsResponse": {
         "required": [
-          "groupsCreated",
-          "membershipsAdded"
+          "discussionsCreated"
         ],
         "type": "object",
         "properties": {
-          "groupsCreated": {
-            "pattern": "^-?(?:0|[1-9]\\d*)$",
-            "type": [
-              "integer",
-              "string"
-            ],
-            "format": "int32"
-          },
-          "membershipsAdded": {
+          "discussionsCreated": {
             "pattern": "^-?(?:0|[1-9]\\d*)$",
             "type": [
               "integer",
@@ -9714,6 +10706,79 @@
         "properties": {
           "completed": {
             "type": "boolean"
+          }
+        }
+      },
+      "StaffGroupDto": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "StaffGroupMemberDto": {
+        "required": [
+          "id",
+          "userId",
+          "userFullName",
+          "joinedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userFullName": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "StaffGroupPostDto": {
+        "required": [
+          "id",
+          "staffGroupId",
+          "authorId",
+          "content",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "staffGroupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -10617,6 +11682,54 @@
           }
         }
       },
+      "UpdateClubHomeSiteRequest": {
+        "required": [
+          "homeSiteHtml"
+        ],
+        "type": "object",
+        "properties": {
+          "homeSiteHtml": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "UpdateClubRequest": {
+        "required": [
+          "name",
+          "description",
+          "facultyLeadUserId",
+          "studentInchargeUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "facultyLeadUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "studentInchargeUserId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
       "UpdateCodeProjectRequest": {
         "required": [
           "name",
@@ -11078,6 +12191,12 @@
     },
     {
       "name": "Calendar"
+    },
+    {
+      "name": "ClassroomDiscussions"
+    },
+    {
+      "name": "Clubs"
     },
     {
       "name": "CodeExecution"

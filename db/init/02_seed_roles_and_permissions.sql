@@ -14,18 +14,30 @@
 BEGIN;
 
 -- Roles
+-- class_representative (2 per section, student-held) added alongside the Community redesign
+-- (clubs / classroom_discussions split) - same section-scope/max-2-per-section pattern as
+-- class_teacher, but for students, not teachers. Pending Section 9 update, same as
+-- class_teacher was when it was added (see that entry's own note below).
 INSERT INTO roles (code, default_scope_kind) VALUES
-    ('lecturer',     'department'),
-    ('hod',          'department'),
-    ('finance',      'global'),
-    ('it',           'global'),
-    ('admin',        'global'),
-    ('class_teacher','section')
+    ('lecturer',            'department'),
+    ('hod',                 'department'),
+    ('finance',             'global'),
+    ('it',                  'global'),
+    ('admin',               'global'),
+    ('class_teacher',       'section'),
+    ('class_representative','section')
 ON CONFLICT (code) DO NOTHING;
 
 -- Permission catalog — the full list from architecture doc Section 9.
+-- create_clubs/view_all_clubs are NEW as of the Community redesign (clubs split out of the
+-- old flat "groups" concept). create_group/view_all_groups keep their existing codes but are
+-- narrowed in meaning to staff_groups only, now that Club/SubjectSection have their own
+-- concepts - not renamed, per this file's own anti-drift rule (don't rename an existing
+-- catalog entry without a doc update; adding new codes for new capabilities is fine).
 INSERT INTO permissions (code, description) VALUES
-    ('create_group',                 'Create a community group (TWA-05, AWA-12)'),
+    ('create_group',                 'Create a staff-only community group (TWA-05, AWA-12)'),
+    ('create_clubs',                  'Create a club (AWA-12 redesign)'),
+    ('view_all_clubs',                'Oversight of every club at the caller''s college - holders can manage a club''s membership/leadership without being a member themselves (AWA-12 redesign)'),
     ('create_event',                 'Create a calendar event (TWA-15, AWA-11)'),
     ('add_internal_marks',           'Publish internal marks (TWA-16)'),
     ('add_external_marks',           'Submit external marks (TWA-17) — nobody by default, time-bound PermissionGrant only'),
@@ -46,11 +58,14 @@ INSERT INTO permissions (code, description) VALUES
 ON CONFLICT (code) DO NOTHING;
 
 -- Default permission bundles per role, per Section 9's "Default holders" column.
--- Lecturer: department/section-scoped teaching concerns.
+-- Lecturer: department/section-scoped teaching concerns. create_clubs added alongside
+-- create_group - teachers are the real-world faculty-lead role a club needs (research: every
+-- recognized student org requires a faculty advisor), so the same tier that can create a
+-- staff group can also create/lead a club.
 INSERT INTO role_default_permissions (role_code, permission_code)
 SELECT 'lecturer', code FROM permissions
 WHERE code IN (
-    'create_group', 'create_event',
+    'create_group', 'create_clubs', 'create_event',
     'add_internal_marks',
     'view_all_groups'
 )
@@ -60,7 +75,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO role_default_permissions (role_code, permission_code)
 SELECT 'hod', code FROM permissions
 WHERE code IN (
-    'create_group', 'create_event',
+    'create_group', 'create_clubs', 'create_event',
     'add_internal_marks',
     'view_all_groups',
     'create_timetable', 'approve_external_marks', 'view_department_reports'

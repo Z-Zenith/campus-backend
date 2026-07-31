@@ -57,6 +57,16 @@ DO $$ BEGIN
     CREATE TYPE event_type AS ENUM ('academic', 'holiday', 'cultural', 'sports', 'other');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- Events redesign: non-routine events need sign-off before appearing on the general
+-- calendar (real registrar/student-affairs practice: club-proposed events need approval,
+-- routine notices from an existing create_event holder don't). Default 'approved' at the
+-- column level so every pre-existing INSERT path (and any caller that doesn't set it
+-- explicitly) keeps working unchanged; application code explicitly sets 'pending' only for
+-- the new event_organizer role's creations (see 02_seed_roles_and_permissions.sql).
+DO $$ BEGIN
+    CREATE TYPE event_status AS ENUM ('pending', 'approved', 'denied');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 DO $$ BEGIN
     CREATE TYPE exam_type AS ENUM ('internal', 'external');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -566,6 +576,11 @@ CREATE TABLE IF NOT EXISTS materials (
 );
 
 -- ─── 1.7 Calendar & Events ────────────────────────────────────────────────────
+-- recurrence_rule: a simple RRULE-lite string (e.g. "FREQ=WEEKLY;INTERVAL=1;COUNT=10" or
+-- "FREQ=DAILY;UNTIL=2026-12-31"), validated for syntax by Services/RecurrenceRule.cs. Storage
+-- and validation only - expanding a rule into individual calendar occurrences for display is
+-- a materially separate, larger feature and is NOT implemented this round; a recurring event
+-- currently shows as its single stored start_time/end_time occurrence everywhere it's read.
 CREATE TABLE IF NOT EXISTS events (
     id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     college_id             uuid NOT NULL REFERENCES colleges(id) ON DELETE CASCADE,
@@ -576,7 +591,15 @@ CREATE TABLE IF NOT EXISTS events (
     restricted_years       int[],
     restricted_departments uuid[],
     event_type             event_type NOT NULL DEFAULT 'academic',
-    CHECK (end_time > start_time)
+    status                 event_status NOT NULL DEFAULT 'approved',
+    approved_by            uuid REFERENCES users(id) ON DELETE SET NULL,
+    approved_at            timestamptz,
+    recurrence_rule        text,
+    CHECK (end_time > start_time),
+    CHECK (
+        (status = 'pending' AND approved_by IS NULL AND approved_at IS NULL) OR
+        (status <> 'pending' AND approved_by IS NOT NULL AND approved_at IS NOT NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_events_college_time
     ON events (college_id, start_time);

@@ -68,6 +68,7 @@ builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connect
         .MapEnum<AttendanceStatus>()
         .MapEnum<DocType>()
         .MapEnum<EventType>()
+        .MapEnum<EventStatus>()
         .MapEnum<ExamType>()
         .MapEnum<FeeStatus>()
         .MapEnum<NotificationType>()
@@ -100,6 +101,7 @@ builder.Services.AddScoped<IPermissionService, PermissionService>();
 // #134: per-roll-number login lockout must be shared across requests, not per-scope/request.
 builder.Services.AddSingleton<ParentLoginLockoutService>();
 builder.Services.AddScoped<ICollegeScopeService, CollegeScopeService>();
+builder.Services.AddScoped<IHolidayService, HolidayService>();
 // Notification Router (shared) — see Services/INotificationRouter.cs.
 builder.Services.AddScoped<INotificationRouter, NotificationRouter>();
 builder.Services.AddSignalR();

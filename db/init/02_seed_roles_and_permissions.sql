@@ -18,6 +18,12 @@ BEGIN;
 -- (clubs / classroom_discussions split) - same section-scope/max-2-per-section pattern as
 -- class_teacher, but for students, not teachers. Pending Section 9 update, same as
 -- class_teacher was when it was added (see that entry's own note below).
+--
+-- event_organizer (Events redesign) - a role explicitly requested as bindable to "selected
+-- students": Global scope, no cap, granting create_event so an admin can hand event-creation
+-- authority to any specific student (e.g. a student-council member or event lead) via the
+-- existing RoleBindings UI, without inventing a new RoleBinding scope kind - a role binding
+-- already always targets exactly one user_id regardless of scope.
 INSERT INTO roles (code, default_scope_kind) VALUES
     ('lecturer',            'department'),
     ('hod',                 'department'),
@@ -25,7 +31,8 @@ INSERT INTO roles (code, default_scope_kind) VALUES
     ('it',                  'global'),
     ('admin',               'global'),
     ('class_teacher',       'section'),
-    ('class_representative','section')
+    ('class_representative','section'),
+    ('event_organizer',     'global')
 ON CONFLICT (code) DO NOTHING;
 
 -- Permission catalog — the full list from architecture doc Section 9.
@@ -90,6 +97,15 @@ INSERT INTO role_default_permissions (role_code, permission_code)
 SELECT 'class_teacher', code FROM permissions
 WHERE code IN (
     'view_section_oversight'
+)
+ON CONFLICT DO NOTHING;
+
+-- Event organizer: create_event only - a narrow, single-purpose grant for a student (or
+-- anyone else) assigned this role specifically to run events, not a general admin tier.
+INSERT INTO role_default_permissions (role_code, permission_code)
+SELECT 'event_organizer', code FROM permissions
+WHERE code IN (
+    'create_event'
 )
 ON CONFLICT DO NOTHING;
 

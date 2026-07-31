@@ -12,7 +12,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class TimetableController(AppDbContext db, IPermissionService permissions, INotificationRouter notifications, ICollegeScopeService collegeScope, ILogger<TimetableController> logger) : ControllerBase
+public class TimetableController(AppDbContext db, IPermissionService permissions, INotificationRouter notifications, ICollegeScopeService collegeScope, IHolidayService holidays, ILogger<TimetableController> logger) : ControllerBase
 {
     // 5 weekdays x 6 one-hour periods starting 9am. MVP scheduling heuristic, not a
     // constraint solver — enough to satisfy AWA-01/AWA-02's stated acceptance criteria.
@@ -685,6 +685,15 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         // silently create a duplicate ClassSession for what the roster/UI treats as "today".
         var college = await db.Colleges.FindAsync(caller.CollegeId);
         var sessionDate = request.SessionDate ?? CollegeClock.LocalDate(college, DateTime.UtcNow);
+
+        // Events redesign: a Holiday actually blocks scheduling now, not just an
+        // informational calendar entry - real registrar practice ("no classes... will be
+        // held" on a designated holiday, per this session's research).
+        if (await holidays.IsHolidayAsync(caller.CollegeId, sessionDate))
+        {
+            return BadRequest(new { error = "holiday", message = "Attendance cannot be marked on a college holiday." });
+        }
+
         var session = await db.ClassSessions
             .FirstOrDefaultAsync(s => s.TimetableSlotId == slot.Id && s.SessionDate == sessionDate);
         if (session is null)

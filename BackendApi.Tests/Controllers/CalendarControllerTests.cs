@@ -237,6 +237,13 @@ public class CalendarControllerTests
             StartTime = DateTime.UtcNow.AddDays(1),
             EndTime = DateTime.UtcNow.AddDays(1).AddHours(2),
             CreatedBy = studentId,
+            // EF's InMemory provider doesn't apply the column-level HasDefaultValue(Approved)
+            // the way real Postgres does - a directly-constructed fixture must set this
+            // explicitly or it defaults to Pending (the enum's first value) and gets
+            // silently filtered out of EligibleEventsQuery.
+            Status = EventStatus.Approved,
+            ApprovedBy = studentId,
+            ApprovedAt = DateTime.UtcNow,
         });
 
         await db.SaveChangesAsync();
@@ -481,6 +488,226 @@ public class CalendarControllerTests
         var result = await controller.DeleteEvent(existing.Id);
 
         Assert.IsType<NoContentResult>(result);
+        Assert.Empty(await db.Events.ToListAsync());
+    }
+
+    // --- Events redesign: approval workflow ---
+
+    [Fact]
+    public async Task CreateEvent_ByTeacherOrAdmin_IsAutoApproved()
+    {
+        await using var db = NewDb();
+        var creator = NewUser(AccountType.Teacher);
+        db.Users.Add(creator);
+        await db.SaveChangesAsync();
+
+        var start = DateTime.UtcNow.AddDays(1);
+        var result = await ControllerAs(db, creator).CreateEvent(new CreateEventRequest("Guest Lecture", start, start.AddHours(1), null, null));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        var stored = Assert.Single(await db.Events.ToListAsync());
+        Assert.Equal(EventStatus.Approved, stored.Status);
+        Assert.Equal(creator.Id, stored.ApprovedBy);
+    }
+
+    // The new event_organizer role (bindable to a specific student) grants create_event via
+    // the same permission code the trusted tier uses - CreateEvent can't tell them apart from
+    // the permission check alone, so a Student-created event starts Pending instead.
+    [Fact]
+    public async Task CreateEvent_ByStudent_StartsPendingApproval()
+    {
+        await using var db = NewDb();
+        var organizer = NewUser(AccountType.Student);
+        db.Users.Add(organizer);
+        await db.SaveChangesAsync();
+
+        var start = DateTime.UtcNow.AddDays(1);
+        var result = await ControllerAs(db, organizer).CreateEvent(new CreateEventRequest("Club Fest", start, start.AddHours(1), null, null));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        var stored = Assert.Single(await db.Events.ToListAsync());
+        Assert.Equal(EventStatus.Pending, stored.Status);
+        Assert.Null(stored.ApprovedBy);
+        Assert.Null(stored.ApprovedAt);
+    }
+
+    [Fact]
+    public async Task ListEvents_NeverShowsAPendingEventToStudents()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        var sectionId = Guid.NewGuid();
+        var studentId = Guid.NewGuid();
+        db.Departments.Add(new Department { Id = departmentId, CollegeId = collegeId, Name = "CS" });
+        db.Sections.Add(new Section { Id = sectionId, DepartmentId = departmentId, Year = 1, Name = "A" });
+        db.Users.Add(new User
+        {
+            Id = studentId, CollegeId = collegeId, Identifier = "student-1", PasswordHash = "hash",
+            FullName = "Student", IsActive = true, AccountType = AccountType.Student,
+        });
+        db.SectionEnrollments.Add(new SectionEnrollment { Id = Guid.NewGuid(), SectionId = sectionId, StudentId = studentId });
+        db.Events.Add(new Event
+        {
+            Id = Guid.NewGuid(), CollegeId = collegeId, Title = "Pending Fest",
+            StartTime = DateTime.UtcNow.AddDays(1), EndTime = DateTime.UtcNow.AddDays(1).AddHours(1),
+            CreatedBy = studentId, Status = EventStatus.Pending,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, new User { Id = studentId }).ListEvents();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var events = Assert.IsType<List<EventDto>>(ok.Value);
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public async Task ApproveEvent_ApprovesAPendingEvent()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var organizer = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, organizer);
+        var pending = new Event
+        {
+            Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Title = "Club Fest",
+            StartTime = DateTime.UtcNow.AddDays(1), EndTime = DateTime.UtcNow.AddDays(1).AddHours(1),
+            CreatedBy = organizer.Id, Status = EventStatus.Pending,
+        };
+        db.Events.Add(pending);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).ApproveEvent(pending.Id, new ApproveEventRequest(true));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<AdminEventDto>(ok.Value);
+        Assert.Equal(EventStatus.Approved, dto.Status);
+        Assert.Equal(admin.Id, dto.ApprovedBy);
+    }
+
+    [Fact]
+    public async Task ApproveEvent_CanDenyAPendingEvent()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var organizer = NewUser(AccountType.Student);
+        db.Users.AddRange(admin, organizer);
+        var pending = new Event
+        {
+            Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Title = "Club Fest",
+            StartTime = DateTime.UtcNow.AddDays(1), EndTime = DateTime.UtcNow.AddDays(1).AddHours(1),
+            CreatedBy = organizer.Id, Status = EventStatus.Pending,
+        };
+        db.Events.Add(pending);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).ApproveEvent(pending.Id, new ApproveEventRequest(false));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<AdminEventDto>(ok.Value);
+        Assert.Equal(EventStatus.Denied, dto.Status);
+    }
+
+    [Fact]
+    public async Task ApproveEvent_ForbidsAStudentFromApprovingEvents()
+    {
+        await using var db = NewDb();
+        var organizer = NewUser(AccountType.Student);
+        db.Users.Add(organizer);
+        var pending = new Event
+        {
+            Id = Guid.NewGuid(), CollegeId = organizer.CollegeId, Title = "Club Fest",
+            StartTime = DateTime.UtcNow.AddDays(1), EndTime = DateTime.UtcNow.AddDays(1).AddHours(1),
+            CreatedBy = organizer.Id, Status = EventStatus.Pending,
+        };
+        db.Events.Add(pending);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, organizer).ApproveEvent(pending.Id, new ApproveEventRequest(true));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ApproveEvent_RejectsReapprovingAnAlreadyDecidedEvent()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        var alreadyApproved = new Event
+        {
+            Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Title = "Fest",
+            StartTime = DateTime.UtcNow.AddDays(1), EndTime = DateTime.UtcNow.AddDays(1).AddHours(1),
+            CreatedBy = admin.Id, Status = EventStatus.Approved, ApprovedBy = admin.Id, ApprovedAt = DateTime.UtcNow,
+        };
+        db.Events.Add(alreadyApproved);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).ApproveEvent(alreadyApproved.Id, new ApproveEventRequest(true));
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+    }
+
+    [Fact]
+    public async Task ListPendingEvents_ReturnsOnlyPendingEventsAtCallersCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        db.Users.Add(admin);
+        db.Events.AddRange(
+            new Event { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Title = "Pending Here", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = admin.Id, Status = EventStatus.Pending },
+            new Event { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Title = "Already Approved", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = admin.Id, Status = EventStatus.Approved, ApprovedBy = admin.Id, ApprovedAt = DateTime.UtcNow },
+            new Event { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Title = "Pending Elsewhere", StartTime = DateTime.UtcNow, EndTime = DateTime.UtcNow.AddHours(1), CreatedBy = admin.Id, Status = EventStatus.Pending });
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).ListPendingEvents();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var events = Assert.IsType<List<AdminEventDto>>(ok.Value);
+        Assert.Single(events);
+        Assert.Equal("Pending Here", events[0].Title);
+    }
+
+    // --- Events redesign: recurrence rule validation ---
+
+    [Theory]
+    [InlineData("FREQ=WEEKLY;INTERVAL=1;COUNT=10")]
+    [InlineData("FREQ=DAILY;UNTIL=2026-12-31")]
+    [InlineData("FREQ=MONTHLY")]
+    public async Task CreateEvent_AcceptsValidRecurrenceRules(string rule)
+    {
+        await using var db = NewDb();
+        var creator = NewUser(AccountType.Teacher);
+        db.Users.Add(creator);
+        await db.SaveChangesAsync();
+
+        var start = DateTime.UtcNow.AddDays(1);
+        var result = await ControllerAs(db, creator).CreateEvent(
+            new CreateEventRequest("Office Hours", start, start.AddHours(1), null, null, RecurrenceRule: rule));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        var stored = Assert.Single(await db.Events.ToListAsync());
+        Assert.Equal(rule, stored.RecurrenceRule);
+    }
+
+    [Theory]
+    [InlineData("FREQ=YEARLY")]
+    [InlineData("FREQ=WEEKLY;COUNT=5;UNTIL=2026-12-31")]
+    [InlineData("garbage")]
+    [InlineData("INTERVAL=1")]
+    public async Task CreateEvent_RejectsInvalidRecurrenceRules(string rule)
+    {
+        await using var db = NewDb();
+        var creator = NewUser(AccountType.Teacher);
+        db.Users.Add(creator);
+        await db.SaveChangesAsync();
+
+        var start = DateTime.UtcNow.AddDays(1);
+        var result = await ControllerAs(db, creator).CreateEvent(
+            new CreateEventRequest("Office Hours", start, start.AddHours(1), null, null, RecurrenceRule: rule));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.Empty(await db.Events.ToListAsync());
     }
 }

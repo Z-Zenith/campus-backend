@@ -29,4 +29,6 @@ public enum WhitelistRequestStatus { Pending, Approved, Rejected }
 
 public enum EventType { Academic, Holiday, Cultural, Sports, Other }
 
+public enum EventStatus { Pending, Approved, Denied }
+
 public enum ExamType { Internal, External }

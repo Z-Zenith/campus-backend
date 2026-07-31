@@ -17,7 +17,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class ExamSchedulesController(AppDbContext db, IPermissionService permissions, ICollegeScopeService collegeScope) : ControllerBase
+public class ExamSchedulesController(AppDbContext db, IPermissionService permissions, ICollegeScopeService collegeScope, IHolidayService holidays) : ControllerBase
 {
     // Read-only section picker for the exam-schedule form above - see SectionDto's doc
     // comment for why this isn't full Section CRUD.
@@ -104,6 +104,10 @@ public class ExamSchedulesController(AppDbContext db, IPermissionService permiss
         {
             return BadRequest("EndTime must be after StartTime.");
         }
+        if (await holidays.IsHolidayAsync(section.Department.CollegeId, request.ExamDate))
+        {
+            return BadRequest("ExamDate falls on a college holiday.");
+        }
 
         if (await db.ExamSchedules.AnyAsync(e => e.SectionId == sectionId && e.SubjectId == request.SubjectId && e.ExamType == request.ExamType))
         {
@@ -154,6 +158,10 @@ public class ExamSchedulesController(AppDbContext db, IPermissionService permiss
         if (request.EndTime <= request.StartTime)
         {
             return BadRequest("EndTime must be after StartTime.");
+        }
+        if (await holidays.IsHolidayAsync(schedule.Section.Department.CollegeId, request.ExamDate))
+        {
+            return BadRequest("ExamDate falls on a college holiday.");
         }
 
         schedule.ExamDate = request.ExamDate;

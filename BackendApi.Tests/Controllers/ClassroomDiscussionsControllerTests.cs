@@ -203,4 +203,22 @@ public class ClassroomDiscussionsControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
     }
+
+    // #11-class regression: AdminTier previously bypassed CanAccessAsync unconditionally.
+    [Fact]
+    public async Task CreatePost_ForbidsAdminFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var collegeId = Guid.NewGuid();
+        var admin = NewUser(AccountType.AdminTier);
+        var (_, section, subject) = SeedAcademicStructure(db, collegeId);
+        var discussion = new ClassroomDiscussion { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, CreatedAt = DateTime.UtcNow };
+        db.Users.Add(admin);
+        db.ClassroomDiscussions.Add(discussion);
+        await db.SaveChangesAsync();
+
+        var result = await ControllerAs(db, admin).CreatePost(discussion.Id, new CreateClassroomDiscussionPostRequest("Hello"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
 }

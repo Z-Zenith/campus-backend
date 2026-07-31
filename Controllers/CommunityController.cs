@@ -333,9 +333,17 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
     private async Task<bool> CanViewMaterialAsync(Material material, User caller)
     {
-        if (material.UploadedBy == caller.Id || caller.AccountType == AccountType.AdminTier)
+        if (material.UploadedBy == caller.Id)
         {
             return true;
+        }
+
+        // #11-class fix: AdminTier must still be college-scoped - an unconditional `true`
+        // here would let an Admin at any college view material belonging to any other
+        // college's Club/StaffGroup/ClassroomDiscussion/Subject.
+        if (caller.AccountType == AccountType.AdminTier)
+        {
+            return await IsMaterialInCollegeAsync(material, caller.CollegeId);
         }
 
         if (material.ClubId is not null)
@@ -386,6 +394,32 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
             return await db.TimetableSlots
                 .AnyAsync(t => t.SubjectId == material.SubjectId && callerSectionIds.Contains(t.SectionId));
+        }
+
+        return false;
+    }
+
+    private async Task<bool> IsMaterialInCollegeAsync(Material material, Guid collegeId)
+    {
+        if (material.ClubId is not null)
+        {
+            return await db.Clubs.AnyAsync(c => c.Id == material.ClubId && c.CollegeId == collegeId);
+        }
+
+        if (material.StaffGroupId is not null)
+        {
+            return await db.StaffGroups.AnyAsync(g => g.Id == material.StaffGroupId && g.CollegeId == collegeId);
+        }
+
+        if (material.ClassroomDiscussionId is not null)
+        {
+            return await db.ClassroomDiscussions
+                .AnyAsync(d => d.Id == material.ClassroomDiscussionId && d.Section.Department.CollegeId == collegeId);
+        }
+
+        if (material.SubjectId is not null)
+        {
+            return await db.Subjects.AnyAsync(s => s.Id == material.SubjectId && s.Department.CollegeId == collegeId);
         }
 
         return false;

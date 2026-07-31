@@ -280,6 +280,34 @@ public class CommunityControllerTests
         Assert.IsType<RedirectResult>(result);
     }
 
+    // #11-class regression: AdminTier previously bypassed CanViewMaterialAsync unconditionally.
+    [Fact]
+    public async Task DownloadMaterial_ForbidsAdminFromAnotherCollegesClubMaterial()
+    {
+        await using var db = NewDb();
+        var uploader = NewUser(AccountType.Teacher);
+        var admin = NewUser(AccountType.AdminTier);
+        var club = new Club { Id = Guid.NewGuid(), CollegeId = uploader.CollegeId, Name = "Chess Club", CreatedAt = DateTime.UtcNow };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Rules",
+            FileUrl = "https://storage.campus.local/rules.pdf",
+            ClubId = club.Id,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.AddRange(uploader, admin);
+        db.Clubs.Add(club);
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, admin, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        Assert.IsType<ForbidResult>(result);
+    }
+
     [Fact]
     public async Task DownloadMaterial_ForbidsNonMemberFromClubMaterial()
     {

@@ -181,9 +181,11 @@ public class ClassroomDiscussionsController(AppDbContext db) : ControllerBase
         {
             return false;
         }
+        // #11-class fix: AdminTier must still be college-scoped - an unconditional `true`
+        // here let an Admin at any college read/post in any other college's discussion.
         if (user.AccountType == AccountType.AdminTier)
         {
-            return true;
+            return await db.Sections.AnyAsync(s => s.Id == discussion.SectionId && s.Department.CollegeId == user.CollegeId);
         }
         if (user.AccountType == AccountType.Student)
         {

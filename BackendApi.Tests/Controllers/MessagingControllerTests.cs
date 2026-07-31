@@ -3,9 +3,11 @@ using BackendApi.Contracts;
 using BackendApi.Controllers;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -27,7 +29,8 @@ public class MessagingControllerTests
 
     private static MessagingController ControllerAs(AppDbContext db, User user) => ControllerAs(db, user.Id);
 
-    private static MessagingController ControllerAs(AppDbContext db, Guid userId) => new(db)
+    private static MessagingController ControllerAs(AppDbContext db, Guid userId) =>
+        new(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance))
     {
         ControllerContext = new ControllerContext
         {

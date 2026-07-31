@@ -7,6 +7,7 @@ using BackendApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -31,7 +32,7 @@ public class RolesControllerTests
         IsActive = true,
     };
 
-    private static RolesController ControllerAs(AppDbContext db, Guid userId) => new(db, new PermissionService(db), new CollegeScopeService(db))
+    private static RolesController ControllerAs(AppDbContext db, Guid userId) => new(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), new CollegeScopeService(db))
     {
         ControllerContext = new ControllerContext
         {
@@ -128,7 +129,7 @@ public class RolesControllerTests
         db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
 
-        var permissionService = new PermissionService(db);
+        var permissionService = new AuthorizationService(db, NullLogger<AuthorizationService>.Instance);
         var controller = ControllerAs(db, admin.Id);
 
         var grantResult = await controller.CreatePermissionGrant(new CreatePermissionGrantRequest(target.Id, "create_timetable", true, null));

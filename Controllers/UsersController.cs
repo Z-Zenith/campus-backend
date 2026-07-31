@@ -12,7 +12,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/users")]
 [Authorize]
-public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, ITotpService totpService, IPermissionService permissions, ICollegeScopeService collegeScope) : ControllerBase
+public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, ITotpService totpService, IAppAuthorizationService permissions, ICollegeScopeService collegeScope) : ControllerBase
 {
     // AWA-09: account creation. Returns the TOTP provisioning URI once, at creation time,
     // since SDA-02/TWA-03 login always requires a TOTP code alongside password.

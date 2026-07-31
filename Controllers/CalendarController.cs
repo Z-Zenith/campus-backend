@@ -12,7 +12,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class CalendarController(AppDbContext db, IPermissionService permissions) : ControllerBase
+public class CalendarController(AppDbContext db, IAppAuthorizationService permissions) : ControllerBase
 {
     // TWA-15, AWA-11
     [HttpPost("events")]

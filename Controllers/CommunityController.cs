@@ -13,7 +13,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class CommunityController(AppDbContext db, IPermissionService permissions, IConfiguration configuration) : ControllerBase
+public class CommunityController(AppDbContext db, IAppAuthorizationService permissions, IConfiguration configuration) : ControllerBase
 {
     // API-02: "one class group created per class [section], every semester... no manual
     // step required." No semester-start scheduler exists yet, so this is triggered
@@ -190,8 +190,7 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             return BadRequest(new { error = "content_required", message = "Post content must not be empty." });
         }
 
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await permissions.CheckRelationAsync(userId, "member", "group", id.ToString()))
         {
             return Forbid();
         }
@@ -216,8 +215,7 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
     public async Task<ActionResult<List<GroupPostDto>>> ListPosts(Guid id)
     {
         var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await permissions.CheckRelationAsync(userId, "member", "group", id.ToString()))
         {
             return Forbid();
         }
@@ -238,8 +236,7 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
     public async Task<ActionResult<List<MaterialDto>>> ListGroupMaterials(Guid id)
     {
         var userId = CurrentUserId();
-        var isMember = await db.GroupMembers.AnyAsync(m => m.GroupId == id && m.UserId == userId);
-        if (!isMember)
+        if (!await permissions.CheckRelationAsync(userId, "member", "group", id.ToString()))
         {
             return Forbid();
         }
@@ -362,7 +359,7 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
         if (material.GroupId is not null)
         {
-            return await db.GroupMembers.AnyAsync(m => m.GroupId == material.GroupId && m.UserId == caller.Id);
+            return await permissions.CheckRelationAsync(caller.Id, "member", "group", material.GroupId.Value.ToString());
         }
 
         if (material.SubjectId is not null)

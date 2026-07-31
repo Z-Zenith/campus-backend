@@ -11,7 +11,7 @@ namespace BackendApi.Controllers;
 
 [ApiController]
 [Route("api/v1/marks")]
-public class MarksController(AppDbContext db, IPermissionService permissions, ICollegeScopeService collegeScope) : ControllerBase
+public class MarksController(AppDbContext db, IAppAuthorizationService permissions, ICollegeScopeService collegeScope) : ControllerBase
 {
     private const string AddExternalMarksPermission = "add_external_marks";
 
@@ -33,19 +33,25 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
         }
 
         // Scope to the caller's own section/subject: the teacher must be assigned to teach
-        // this subject to a section the student is actually enrolled in.
-        var teacherSectionIds = await db.TeacherSectionAssignments
-            .Where(a => a.TeacherId == userId && a.SubjectId == request.SubjectId)
-            .Select(a => a.SectionId)
+        // this subject to a section the student is actually enrolled in. Which section(s) the
+        // student belongs to is a roster lookup, not an authorization check, so it stays a
+        // direct query; the ownership question itself ("does this teacher teach this subject
+        // in that section") goes through the shared relation engine.
+        var studentSectionIds = await db.SectionEnrollments
+            .Where(e => e.StudentId == request.StudentId)
+            .Select(e => e.SectionId)
             .ToListAsync();
-        if (teacherSectionIds.Count == 0)
-        {
-            return Forbid();
-        }
 
-        var studentEnrolled = await db.SectionEnrollments
-            .AnyAsync(e => e.StudentId == request.StudentId && teacherSectionIds.Contains(e.SectionId));
-        if (!studentEnrolled)
+        var authorizedForStudent = false;
+        foreach (var sectionId in studentSectionIds)
+        {
+            if (await permissions.CheckRelationAsync(userId, "teacher", "section", $"{sectionId}:{request.SubjectId}"))
+            {
+                authorizedForStudent = true;
+                break;
+            }
+        }
+        if (!authorizedForStudent)
         {
             return Forbid();
         }
@@ -199,7 +205,8 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
     }
 
     // TWA-17 — read-only check the teacher-web UI polls to decide whether the "submit
-    // external marks" option should render at all. Reads permission_grants directly
+    // external marks" option should render at all. Reads the grant's own status (including
+    // ExpiresAt, which a plain HasPermissionAsync bool can't supply) via the shared service
     // rather than depending on AWA-13's grant-management endpoints (owned/implemented
     // separately), matching the same "is there a live, unexpired grant" rule enforced above.
     [HttpGet("external/permission-status")]
@@ -207,16 +214,8 @@ public class MarksController(AppDbContext db, IPermissionService permissions, IC
     public async Task<ActionResult<ExternalMarksPermissionStatusResponse>> ExternalMarksPermissionStatus()
     {
         var userId = CurrentUserId();
-        var now = DateTime.UtcNow;
-
-        var activeGrant = await db.PermissionGrants
-            .Where(g => g.UserId == userId && g.PermissionCode == AddExternalMarksPermission)
-            .Where(g => g.ExpiresAt == null || g.ExpiresAt > now)
-            .OrderByDescending(g => g.CreatedAt)
-            .FirstOrDefaultAsync();
-
-        var granted = activeGrant is { Granted: true };
-        return Ok(new ExternalMarksPermissionStatusResponse(granted, granted ? activeGrant!.ExpiresAt : null));
+        var (granted, expiresAt) = await permissions.GetPermissionGrantStatusAsync(userId, AddExternalMarksPermission);
+        return Ok(new ExternalMarksPermissionStatusResponse(granted, expiresAt));
     }
 
     // TWA-20 — approval queue for holders of the approve_external_marks permission.

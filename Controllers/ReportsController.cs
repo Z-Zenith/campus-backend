@@ -12,12 +12,13 @@ namespace BackendApi.Controllers;
 // TWA-11: a teacher submits a report about a section or student, routed to Admin.
 // There's no dedicated permission code for this (see db/init/02_seed_roles_and_permissions.sql's
 // anti-drift note — the permission catalog mirrors architecture doc Section 9 verbatim and
-// isn't extended casually), so access is gated directly off role_bindings, mirroring how
-// PermissionService.GetDepartmentScopeAsync checks the "hod" role code directly.
+// isn't extended casually), so access is gated directly off role_bindings via
+// IAppAuthorizationService.HasAnyRoleAsync, mirroring how AuthorizationService.GetDepartmentScopeAsync
+// checks the "hod" role code directly.
 [ApiController]
 [Route("api/v1/reports")]
 [Authorize]
-public class ReportsController(AppDbContext db, INotificationRouter notifications) : ControllerBase
+public class ReportsController(AppDbContext db, INotificationRouter notifications, IAppAuthorizationService permissions) : ControllerBase
 {
     private static readonly string[] TeacherRoleCodes = ["lecturer", "hod"];
 
@@ -26,7 +27,7 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
     public async Task<ActionResult<TeacherReportDto>> Create(CreateReportRequest request)
     {
         var userId = CurrentUserId();
-        if (!await HasAnyRoleAsync(userId, TeacherRoleCodes))
+        if (!await permissions.HasAnyRoleAsync(userId, TeacherRoleCodes))
         {
             return Forbid();
         }
@@ -87,7 +88,7 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
     public async Task<ActionResult<List<TeacherReportDto>>> List()
     {
         var userId = CurrentUserId();
-        if (!await HasAnyRoleAsync(userId, ["admin"]))
+        if (!await permissions.HasAnyRoleAsync(userId, "admin"))
         {
             return Forbid();
         }
@@ -100,9 +101,6 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
             .ToListAsync();
         return Ok(reports.Select(ToDto).ToList());
     }
-
-    private async Task<bool> HasAnyRoleAsync(Guid userId, IReadOnlyCollection<string> roleCodes) =>
-        await db.RoleBindings.AnyAsync(b => b.UserId == userId && roleCodes.Contains(b.RoleCode));
 
     private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
 

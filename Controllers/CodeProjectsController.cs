@@ -2,6 +2,7 @@ using System.Security.Claims;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/code/projects")]
 [Authorize]
-public class CodeProjectsController(AppDbContext db) : ControllerBase
+public class CodeProjectsController(AppDbContext db, IAppAuthorizationService permissions) : ControllerBase
 {
     [HttpGet("mine")]
     public async Task<ActionResult<List<CodeProjectSummaryDto>>> Mine()
@@ -42,7 +43,7 @@ public class CodeProjectsController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (project.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "code_project", project.Id.ToString()))
         {
             return Forbid();
         }
@@ -92,7 +93,7 @@ public class CodeProjectsController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (project.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "code_project", project.Id.ToString()))
         {
             return Forbid();
         }
@@ -136,7 +137,7 @@ public class CodeProjectsController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (project.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "code_project", project.Id.ToString()))
         {
             return Forbid();
         }

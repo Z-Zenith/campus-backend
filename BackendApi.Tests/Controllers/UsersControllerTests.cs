@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -43,7 +44,7 @@ public class UsersControllerTests
         IsActive = isActive,
     };
 
-    // Mirrors PermissionService's actual resolution, as a direct grant so tests don't need
+    // Mirrors AuthorizationService's actual resolution, as a direct grant so tests don't need
     // to seed roles/role-bindings just to exercise the controller's permission check.
     private static PermissionGrant GrantViewAllStudentRecords(Guid userId) => new()
     {
@@ -66,7 +67,7 @@ public class UsersControllerTests
     };
 
     private static UsersController ControllerAs(AppDbContext db, Guid userId, ITotpService? totpService = null) =>
-        new(db, new BcryptPasswordHasher(), totpService ?? new TotpService(new EphemeralDataProtectionProvider()), new PermissionService(db), new CollegeScopeService(db))
+        new(db, new BcryptPasswordHasher(), totpService ?? new TotpService(new EphemeralDataProtectionProvider()), new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), new CollegeScopeService(db))
         {
             ControllerContext = new ControllerContext
             {

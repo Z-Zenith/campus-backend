@@ -12,7 +12,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class RolesController(AppDbContext db, IPermissionService permissions, ICollegeScopeService collegeScope) : ControllerBase
+public class RolesController(AppDbContext db, IAppAuthorizationService permissions, ICollegeScopeService collegeScope) : ControllerBase
 {
     // AWA-13 — #127: scoped to the caller's own college. Without this, any holder of
     // manage_roles_and_permissions (a college-scoped role in intent, per architecture doc
@@ -149,7 +149,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         return Ok(ToDto(grant));
     }
 
-    // AWA-13 — deleting the override row is the revoke: PermissionService (IPermissionService)
+    // AWA-13 — deleting the override row is the revoke: AuthorizationService (IAppAuthorizationService)
     // reads permission_grants live on every check, so removal takes effect on the caller's very
     // next request without needing to re-login, satisfying the AC.
     [HttpDelete("permission-grants/{id}")]
@@ -222,7 +222,7 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
     // active HoD binding at a time — departments.hod_role_binding_id is the single pointer
     // to the active binding, so reassigning must both point it at a freshly-created binding
     // and remove the previous binding row in the same transaction. Removing it (rather than
-    // just repointing the FK) matters because PermissionService/GetDepartmentScopeAsync read
+    // just repointing the FK) matters because AuthorizationService/GetDepartmentScopeAsync read
     // role_bindings directly — a stale row left behind would keep granting the old HoD's
     // department-scoped permissions even after they were replaced.
     [HttpPost("departments/{id}/hod")]

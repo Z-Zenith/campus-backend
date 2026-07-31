@@ -15,7 +15,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, IPermissionService permissions, INotificationRouter notifications) : ControllerBase
+public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, IAppAuthorizationService permissions, INotificationRouter notifications) : ControllerBase
 {
     // SDA-03: whitelist_sites is college-scoped (not per-class) — this is the already-
     // decided design that SDA-04's "approval applies institution-wide" acceptance

@@ -3,6 +3,7 @@ using BackendApi.Data;
 using BackendApi.Data.Entities;
 using BackendApi.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Services;
 
@@ -15,6 +16,12 @@ public class ParentWardAccessTests
             .Options;
         return new AppDbContext(options);
     }
+
+    // Real AuthorizationService (not a fake) — these tests exercise genuine parent_wards
+    // seed/revoke state, so the real CheckRelationAsync("parent","student",...) path is
+    // what's actually under test here.
+    private static IAppAuthorizationService NewAuthService(AppDbContext db) =>
+        new AuthorizationService(db, NullLogger<AuthorizationService>.Instance);
 
     private static ClaimsPrincipal BuildPrincipal(Guid userId, Guid sessionId, Guid wardId, string accountType = "Parent")
     {
@@ -73,7 +80,7 @@ public class ParentWardAccessTests
         var (parentId, studentId, sessionId) = await SeedLinkedParentAsync(db);
         var principal = BuildPrincipal(parentId, sessionId, studentId);
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, studentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, studentId);
 
         Assert.Equal(parentId, result);
     }
@@ -85,7 +92,7 @@ public class ParentWardAccessTests
         var (parentId, studentId, sessionId) = await SeedLinkedParentAsync(db);
         var principal = BuildPrincipal(parentId, sessionId, studentId, accountType: "Student");
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, studentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, studentId);
 
         Assert.Null(result);
     }
@@ -98,7 +105,7 @@ public class ParentWardAccessTests
         var principal = BuildPrincipal(parentId, sessionId, studentId);
         var otherStudentId = Guid.NewGuid();
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, otherStudentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, otherStudentId);
 
         Assert.Null(result);
     }
@@ -110,7 +117,7 @@ public class ParentWardAccessTests
         var (parentId, studentId, sessionId) = await SeedLinkedParentAsync(db, sessionActive: false);
         var principal = BuildPrincipal(parentId, sessionId, studentId);
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, studentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, studentId);
 
         Assert.Null(result);
     }
@@ -122,7 +129,7 @@ public class ParentWardAccessTests
         var (parentId, studentId, sessionId) = await SeedLinkedParentAsync(db, keepWardLink: false);
         var principal = BuildPrincipal(parentId, sessionId, studentId);
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, studentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, studentId);
 
         Assert.Null(result);
     }
@@ -134,7 +141,7 @@ public class ParentWardAccessTests
         var (parentId, studentId, sessionId) = await SeedLinkedParentAsync(db, parentActive: false);
         var principal = BuildPrincipal(parentId, sessionId, studentId);
 
-        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, principal, studentId);
+        var result = await ParentWardAccess.GetAuthorizedParentIdAsync(db, NewAuthService(db), principal, studentId);
 
         Assert.Null(result);
     }

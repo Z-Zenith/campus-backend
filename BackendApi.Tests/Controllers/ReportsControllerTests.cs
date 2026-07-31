@@ -7,6 +7,7 @@ using BackendApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -50,7 +51,7 @@ public class ReportsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new ReportsController(db, router)
+        return new ReportsController(db, router, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance))
         {
             ControllerContext = new ControllerContext
             {

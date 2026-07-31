@@ -14,10 +14,19 @@ public class CalendarControllerTests
 {
     // Grants "create_event" unconditionally — no test in this file needs department-scoped
     // permission checks.
-    private class AllowingPermissionService : IPermissionService
+    private class AllowingPermissionService : IAppAuthorizationService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(true);
+        public Task<bool> CheckRelationAsync(Guid userId, string relation, string resourceType, string resourceId) => Task.FromResult(true);
+        public Task<bool> HasAnyRoleAsync(Guid userId, params string[] roleCodes) => Task.FromResult(true);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<IReadOnlyDictionary<string, bool>> HasPermissionsAsync(Guid userId, params string[] permissionCodes) =>
+            Task.FromResult<IReadOnlyDictionary<string, bool>>(permissionCodes.ToDictionary(c => c, _ => true));
+        public Task<IReadOnlyDictionary<(string Relation, string ResourceType, string ResourceId), bool>> CheckRelationsAsync(
+            Guid userId, params (string Relation, string ResourceType, string ResourceId)[] checks) =>
+            Task.FromResult<IReadOnlyDictionary<(string, string, string), bool>>(checks.ToDictionary(c => c, _ => true));
+        public Task<(bool Granted, DateTime? ExpiresAt)> GetPermissionGrantStatusAsync(Guid userId, string permissionCode) =>
+            Task.FromResult<(bool, DateTime?)>((true, null));
     }
 
     private static AppDbContext NewDb() => new(
@@ -124,10 +133,19 @@ public class CalendarControllerTests
     private static AppDbContext NewDb(string dbName) => new(
         new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(dbName).Options);
 
-    private class FakePermissionService : IPermissionService
+    private class FakePermissionService : IAppAuthorizationService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
+        public Task<bool> CheckRelationAsync(Guid userId, string relation, string resourceType, string resourceId) => Task.FromResult(false);
+        public Task<bool> HasAnyRoleAsync(Guid userId, params string[] roleCodes) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<IReadOnlyDictionary<string, bool>> HasPermissionsAsync(Guid userId, params string[] permissionCodes) =>
+            Task.FromResult<IReadOnlyDictionary<string, bool>>(permissionCodes.ToDictionary(c => c, _ => false));
+        public Task<IReadOnlyDictionary<(string Relation, string ResourceType, string ResourceId), bool>> CheckRelationsAsync(
+            Guid userId, params (string Relation, string ResourceType, string ResourceId)[] checks) =>
+            Task.FromResult<IReadOnlyDictionary<(string, string, string), bool>>(checks.ToDictionary(c => c, _ => false));
+        public Task<(bool Granted, DateTime? ExpiresAt)> GetPermissionGrantStatusAsync(Guid userId, string permissionCode) =>
+            Task.FromResult<(bool, DateTime?)>((false, null));
     }
 
     // #94: simulates the exact race CalendarController.RegisterForEvent must survive — two

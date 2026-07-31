@@ -7,7 +7,7 @@ namespace BackendApi.Services;
 // Applies the ParentWardAccess gate to any [Authorize] action whose route has a `studentId`
 // parameter, so a new ward-scoped endpoint is denied by default instead of depending on
 // remembering to paste the check manually into the action body.
-public class WardAccessFilter(AppDbContext db) : IAsyncActionFilter
+public class WardAccessFilter(AppDbContext db, IAppAuthorizationService permissions) : IAsyncActionFilter
 {
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
@@ -18,7 +18,7 @@ public class WardAccessFilter(AppDbContext db) : IAsyncActionFilter
             return;
         }
 
-        if (await ParentWardAccess.GetAuthorizedParentIdAsync(db, context.HttpContext.User, studentId) is null)
+        if (await ParentWardAccess.GetAuthorizedParentIdAsync(db, permissions, context.HttpContext.User, studentId) is null)
         {
             // #93: NotFound rather than Forbid — a caller who isn't authorized for this ward
             // must not be able to distinguish "this student doesn't exist" from "it's not your

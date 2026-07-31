@@ -12,7 +12,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class TimetableController(AppDbContext db, IPermissionService permissions, INotificationRouter notifications, ICollegeScopeService collegeScope, ILogger<TimetableController> logger) : ControllerBase
+public class TimetableController(AppDbContext db, IAppAuthorizationService permissions, INotificationRouter notifications, ICollegeScopeService collegeScope, ILogger<TimetableController> logger) : ControllerBase
 {
     // 5 weekdays x 6 one-hour periods starting 9am. MVP scheduling heuristic, not a
     // constraint solver — enough to satisfy AWA-01/AWA-02's stated acceptance criteria.
@@ -310,7 +310,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         {
             return NotFound();
         }
-        if (slot.TeacherId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "teacher", "slot", slot.Id.ToString()))
         {
             return Forbid();
         }
@@ -342,9 +342,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
             return BadRequest(new { error = "rating must be between 1 and 5" });
         }
 
-        var taughtSection = await db.TeacherSectionAssignments
-            .AnyAsync(a => a.TeacherId == userId && a.SectionId == sectionId);
-        if (!taughtSection)
+        if (!await permissions.CheckRelationAsync(userId, "teacher", "section", sectionId.ToString()))
         {
             return Forbid();
         }
@@ -497,7 +495,7 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
 
         // Scoped to the teacher's own assigned section: only the teacher timetabled for
         // this slot may mark attendance for its sessions.
-        if (slot.TeacherId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "mark_attendance", "slot", slot.Id.ToString()))
         {
             return Forbid();
         }

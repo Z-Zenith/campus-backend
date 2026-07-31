@@ -14,7 +14,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks) : ControllerBase
+public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices, ICopyleaksClient copyleaks, IAppAuthorizationService permissions) : ControllerBase
 {
     // TWA-07. Gated by "caller teaches this subject" rather than a permission code — no
     // "create_assignment" code exists in the seeded catalog, and adding one is an
@@ -54,7 +54,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
         }
-        if (caller.AccountType is not AccountType.AdminTier && subject.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "subject", subject.Id.ToString()))
         {
             return Forbid();
         }
@@ -310,7 +311,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "assignment", submission.AssignmentId.ToString()))
         {
             return Forbid();
         }
@@ -354,7 +356,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "assignment", submission.AssignmentId.ToString()))
         {
             return Forbid();
         }
@@ -391,7 +394,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && assignment.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "assignment", assignment.Id.ToString()))
         {
             return Forbid();
         }
@@ -446,7 +450,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "assignment", submission.AssignmentId.ToString()))
         {
             return Forbid();
         }
@@ -497,7 +502,8 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && suggestion.Submission.Assignment.TeacherId != caller.Id)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "teacher", "assignment", suggestion.Submission.AssignmentId.ToString()))
         {
             return Forbid();
         }

@@ -7,6 +7,7 @@ using BackendApi.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -79,7 +80,7 @@ public class MarksControllerTests
 
     private static MarksController BuildController(AppDbContext db, Guid callerId)
     {
-        var controller = new MarksController(db, new PermissionService(db), new CollegeScopeService(db));
+        var controller = new MarksController(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), new CollegeScopeService(db));
         var identity = new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, callerId.ToString())]);
         controller.ControllerContext = new ControllerContext
         {

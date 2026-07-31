@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -136,7 +137,7 @@ public class CommunityControllerTests
         IsActive = true,
     };
 
-    // Mirrors PermissionService's actual resolution (role_default_permissions), but as a
+    // Mirrors AuthorizationService's actual resolution (role_default_permissions), but as a
     // direct grant so tests don't need to seed roles/role-bindings just to exercise the
     // controller's permission check.
     private static PermissionGrant GrantCreateGroup(Guid userId) => new()
@@ -163,7 +164,7 @@ public class CommunityControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new CommunityController(db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build())
+        return new CommunityController(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), configuration ?? new ConfigurationBuilder().Build())
         {
             ControllerContext = new ControllerContext
             {

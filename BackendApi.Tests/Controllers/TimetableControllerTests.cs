@@ -14,21 +14,42 @@ namespace BackendApi.Tests;
 
 public class TimetableControllerTests
 {
-    // No test in this file needs a real permission lookup — TWA-12's endpoint doesn't
-    // consult IPermissionService at all (see the controller's comment on why), but the
-    // controller still requires one in its constructor for the other actions.
-    private class FakePermissionService : IPermissionService
+    // No test in this file needs a real permission lookup — TWA-12's endpoint checks section
+    // ownership via CheckRelationAsync, not HasPermissionAsync (see the controller's comment on
+    // why), but the controller still requires an IAppAuthorizationService in its constructor for
+    // the other actions. Relation checks default to true so attendance-marking tests aren't
+    // blocked by an unrelated fake; tests that specifically exercise ownership denial construct
+    // their own fake/seed data instead.
+    private class FakePermissionService : IAppAuthorizationService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(false);
+        public Task<bool> CheckRelationAsync(Guid userId, string relation, string resourceType, string resourceId) => Task.FromResult(true);
+        public Task<bool> HasAnyRoleAsync(Guid userId, params string[] roleCodes) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<IReadOnlyDictionary<string, bool>> HasPermissionsAsync(Guid userId, params string[] permissionCodes) =>
+            Task.FromResult<IReadOnlyDictionary<string, bool>>(permissionCodes.ToDictionary(c => c, _ => false));
+        public Task<IReadOnlyDictionary<(string Relation, string ResourceType, string ResourceId), bool>> CheckRelationsAsync(
+            Guid userId, params (string Relation, string ResourceType, string ResourceId)[] checks) =>
+            Task.FromResult<IReadOnlyDictionary<(string, string, string), bool>>(checks.ToDictionary(c => c, _ => true));
+        public Task<(bool Granted, DateTime? ExpiresAt)> GetPermissionGrantStatusAsync(Guid userId, string permissionCode) =>
+            Task.FromResult<(bool, DateTime?)>((false, null));
     }
 
     // #159: Generate() gates on "create_timetable" — a variant of the fake above that
     // grants it, for tests that need to actually exercise Generate().
-    private class AllowingPermissionService : IPermissionService
+    private class AllowingPermissionService : IAppAuthorizationService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
+        public Task<bool> CheckRelationAsync(Guid userId, string relation, string resourceType, string resourceId) => Task.FromResult(true);
+        public Task<bool> HasAnyRoleAsync(Guid userId, params string[] roleCodes) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<IReadOnlyDictionary<string, bool>> HasPermissionsAsync(Guid userId, params string[] permissionCodes) =>
+            Task.FromResult<IReadOnlyDictionary<string, bool>>(permissionCodes.ToDictionary(c => c, c => c == "create_timetable"));
+        public Task<IReadOnlyDictionary<(string Relation, string ResourceType, string ResourceId), bool>> CheckRelationsAsync(
+            Guid userId, params (string Relation, string ResourceType, string ResourceId)[] checks) =>
+            Task.FromResult<IReadOnlyDictionary<(string, string, string), bool>>(checks.ToDictionary(c => c, _ => true));
+        public Task<(bool Granted, DateTime? ExpiresAt)> GetPermissionGrantStatusAsync(Guid userId, string permissionCode) =>
+            Task.FromResult<(bool, DateTime?)>((permissionCode == "create_timetable", null));
     }
 
     // #159: records LogWarning calls so tests can assert Generate() surfaces skipped
@@ -87,11 +108,15 @@ public class TimetableControllerTests
 
     private static Section NewSection(Guid departmentId) => new() { Id = Guid.NewGuid(), DepartmentId = departmentId, Year = 1, Name = "CS-A" };
 
-    private static TimetableController ControllerAs(AppDbContext db, User user, IPermissionService? permissions = null, ILogger<TimetableController>? logger = null)
+    private static TimetableController ControllerAs(AppDbContext db, User user, IAppAuthorizationService? permissions = null, ILogger<TimetableController>? logger = null)
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new TimetableController(db, permissions ?? new FakePermissionService(), new FakeNotificationRouter(), new CollegeScopeService(db), logger ?? NullLogger<TimetableController>.Instance)
+        // Real AuthorizationService by default (not FakePermissionService) — CheckRelationAsync
+        // must reflect this test's actual seeded TimetableSlots/TeacherSectionAssignments data
+        // (e.g. Twa08_MarkAttendance_ForbidsTeacherNotAssignedToSlot needs a real "no" for an
+        // unassigned teacher, which a fake defaulting to true/false unconditionally can't give).
+        return new TimetableController(db, permissions ?? new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), new FakeNotificationRouter(), new CollegeScopeService(db), logger ?? NullLogger<TimetableController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -683,10 +708,19 @@ public class TimetableControllerTests
 
     // A global (non-HoD) create_timetable holder — GetDepartmentScopeAsync returns null,
     // same as an Admin's binding with no "hod" role.
-    private class FakeGlobalTimetablePermissionService : IPermissionService
+    private class FakeGlobalTimetablePermissionService : IAppAuthorizationService
     {
         public Task<bool> HasPermissionAsync(Guid userId, string permissionCode) => Task.FromResult(permissionCode == "create_timetable");
+        public Task<bool> CheckRelationAsync(Guid userId, string relation, string resourceType, string resourceId) => Task.FromResult(true);
+        public Task<bool> HasAnyRoleAsync(Guid userId, params string[] roleCodes) => Task.FromResult(false);
         public Task<Guid?> GetDepartmentScopeAsync(Guid userId) => Task.FromResult<Guid?>(null);
+        public Task<IReadOnlyDictionary<string, bool>> HasPermissionsAsync(Guid userId, params string[] permissionCodes) =>
+            Task.FromResult<IReadOnlyDictionary<string, bool>>(permissionCodes.ToDictionary(c => c, c => c == "create_timetable"));
+        public Task<IReadOnlyDictionary<(string Relation, string ResourceType, string ResourceId), bool>> CheckRelationsAsync(
+            Guid userId, params (string Relation, string ResourceType, string ResourceId)[] checks) =>
+            Task.FromResult<IReadOnlyDictionary<(string, string, string), bool>>(checks.ToDictionary(c => c, _ => true));
+        public Task<(bool Granted, DateTime? ExpiresAt)> GetPermissionGrantStatusAsync(Guid userId, string permissionCode) =>
+            Task.FromResult<(bool, DateTime?)>((permissionCode == "create_timetable", null));
     }
 
     private static TimetableController GlobalCallerController(AppDbContext db, User caller)

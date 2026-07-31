@@ -3,6 +3,7 @@ using System.Text.Json;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +13,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Authorize]
-public class MessagingController(AppDbContext db) : ControllerBase
+public class MessagingController(AppDbContext db, IAppAuthorizationService permissions) : ControllerBase
 {
     // DMS-01 (Track 2) — get-or-create the single thread for a student-teacher pair.
     // Not in the original documented API map (only send/list were), but a thread has
@@ -103,7 +104,7 @@ public class MessagingController(AppDbContext db) : ControllerBase
         }
 
         var senderId = CurrentUserId();
-        if (senderId != thread.StudentId && senderId != thread.TeacherId)
+        if (!await permissions.CheckRelationAsync(senderId, "participant", "thread", thread.Id.ToString()))
         {
             return Forbid();
         }
@@ -143,7 +144,8 @@ public class MessagingController(AppDbContext db) : ControllerBase
         {
             return Unauthorized();
         }
-        if (caller.AccountType is not AccountType.AdminTier && caller.Id != thread.StudentId && caller.Id != thread.TeacherId)
+        if (caller.AccountType is not AccountType.AdminTier &&
+            !await permissions.CheckRelationAsync(caller.Id, "participant", "thread", thread.Id.ToString()))
         {
             return Forbid();
         }

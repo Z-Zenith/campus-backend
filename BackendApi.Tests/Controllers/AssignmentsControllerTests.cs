@@ -3,11 +3,13 @@ using BackendApi.Contracts;
 using BackendApi.Controllers;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using BackendApi.Tests.Fakes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -34,7 +36,8 @@ public class AssignmentsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient())
+        return new AssignmentsController(db, aiServices ?? new FakeAiServicesClient(), copyleaks ?? new FakeCopyleaksClient(),
+            new AuthorizationService(db, NullLogger<AuthorizationService>.Instance))
         {
             ControllerContext = new ControllerContext
             {
@@ -244,7 +247,7 @@ public class AssignmentsControllerTests
     }
 
     private static AssignmentsController ControllerAs(AppDbContext db, Guid userId) =>
-        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient())
+        new(db, new FakeAiServicesClient(), new FakeCopyleaksClient(), new AuthorizationService(db, NullLogger<AuthorizationService>.Instance))
         {
             ControllerContext = new ControllerContext
             {

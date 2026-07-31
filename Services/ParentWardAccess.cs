@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
-using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Services;
 
@@ -10,7 +9,8 @@ namespace BackendApi.Services;
 // check that binding against the requested studentId here, never trust the route alone.
 public static class ParentWardAccess
 {
-    public static async Task<Guid?> GetAuthorizedParentIdAsync(AppDbContext db, ClaimsPrincipal principal, Guid requestedStudentId)
+    public static async Task<Guid?> GetAuthorizedParentIdAsync(
+        AppDbContext db, IAppAuthorizationService permissions, ClaimsPrincipal principal, Guid requestedStudentId)
     {
         if (principal.FindFirstValue("account_type") != nameof(AccountType.Parent))
         {
@@ -40,9 +40,7 @@ public static class ParentWardAccess
         // Re-check the live parent_wards link rather than trusting the JWT's ward_id claim
         // alone, so revoking a parent's access to a ward takes effect immediately instead of
         // only after the token expires.
-        var stillLinked = await db.ParentWards
-            .AnyAsync(w => w.ParentUserId == userId && w.StudentId == requestedStudentId);
-        if (!stillLinked)
+        if (!await permissions.CheckRelationAsync(userId, "parent", "student", requestedStudentId.ToString()))
         {
             return null;
         }

@@ -13,7 +13,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/fees")]
 [Authorize]
-public class FeesController(AppDbContext db, IPermissionService permissions, IConfiguration configuration, ICollegeScopeService collegeScope) : ControllerBase
+public class FeesController(AppDbContext db, IAppAuthorizationService permissions, IConfiguration configuration, ICollegeScopeService collegeScope) : ControllerBase
 {
     // AWA-04 (Track 2). One FeeRecord per link, so the link is only ever valid for the
     // exact amount/due-date it was generated with — a link can't later be reused/edited
@@ -82,7 +82,7 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
         // WardAccessFilter and BrowsingController.ApproveWhitelistRequest for other ward/scope-
         // gated resources.
         var fee = await db.FeeRecords.FindAsync(id);
-        if (fee is null || await ParentWardAccess.GetAuthorizedParentIdAsync(db, User, fee.StudentId) is null)
+        if (fee is null || await ParentWardAccess.GetAuthorizedParentIdAsync(db, permissions, User, fee.StudentId) is null)
         {
             return NotFound();
         }

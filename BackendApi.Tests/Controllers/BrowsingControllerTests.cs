@@ -8,6 +8,7 @@ using BackendApi.Tests.Fakes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -49,7 +50,7 @@ public class BrowsingControllerTests
         IsActive = true,
     };
 
-    // Mirrors PermissionService's actual resolution (role_default_permissions), but as a
+    // Mirrors AuthorizationService's actual resolution (role_default_permissions), but as a
     // direct grant so tests don't need to seed roles/role-bindings just to exercise the
     // controller's permission check.
     private static PermissionGrant GrantViewBrowsingHistory(Guid userId) => new()
@@ -72,7 +73,7 @@ public class BrowsingControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new BrowsingController(db, aiServices, new PermissionService(db), notifications)
+        return new BrowsingController(db, aiServices, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), notifications)
         {
             ControllerContext = new ControllerContext
             {

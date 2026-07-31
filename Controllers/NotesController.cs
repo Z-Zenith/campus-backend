@@ -2,6 +2,7 @@ using System.Security.Claims;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
+using BackendApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,7 +16,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/notes")]
 [Authorize]
-public class NotesController(AppDbContext db) : ControllerBase
+public class NotesController(AppDbContext db, IAppAuthorizationService permissions) : ControllerBase
 {
     [HttpGet("mine")]
     public async Task<ActionResult<List<NoteSummaryDto>>> Mine()
@@ -41,7 +42,7 @@ public class NotesController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (note.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "note", note.Id.ToString()))
         {
             return Forbid();
         }
@@ -91,7 +92,7 @@ public class NotesController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (note.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "note", note.Id.ToString()))
         {
             return Forbid();
         }
@@ -127,7 +128,7 @@ public class NotesController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (note.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "note", note.Id.ToString()))
         {
             return Forbid();
         }
@@ -153,7 +154,7 @@ public class NotesController(AppDbContext db) : ControllerBase
         {
             return NotFound();
         }
-        if (target.OwnerId != userId)
+        if (!await permissions.CheckRelationAsync(userId, "owner", "note", target.Id.ToString()))
         {
             return Forbid();
         }

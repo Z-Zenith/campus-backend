@@ -94,7 +94,7 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<WardAccessFilter>();
 builder.Services.AddScoped<ISessionActivityService, SessionActivityService>();
 builder.Services.AddScoped<SessionActiveFilter>();
-builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddScoped<IAppAuthorizationService, AuthorizationService>();
 // #134: per-roll-number login lockout must be shared across requests, not per-scope/request.
 builder.Services.AddSingleton<ParentLoginLockoutService>();
 builder.Services.AddScoped<ICollegeScopeService, CollegeScopeService>();

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -62,7 +63,7 @@ public class FeesControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new FeesController(db, new PermissionService(db), configuration ?? new ConfigurationBuilder().Build(), new CollegeScopeService(db))
+        return new FeesController(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), configuration ?? new ConfigurationBuilder().Build(), new CollegeScopeService(db))
         {
             ControllerContext = new ControllerContext
             {
@@ -80,7 +81,7 @@ public class FeesControllerTests
         ], "TestAuth"));
 
     private static FeesController ControllerAs(AppDbContext db, ClaimsPrincipal principal) =>
-        new(db, new PermissionService(db), new ConfigurationBuilder().Build(), new CollegeScopeService(db))
+        new(db, new AuthorizationService(db, NullLogger<AuthorizationService>.Instance), new ConfigurationBuilder().Build(), new CollegeScopeService(db))
         {
             ControllerContext = new ControllerContext
             {

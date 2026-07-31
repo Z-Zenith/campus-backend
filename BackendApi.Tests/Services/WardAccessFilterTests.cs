@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Services;
 
@@ -15,6 +16,9 @@ public class WardAccessFilterTests
 {
     private static AppDbContext NewDb() => new(
         new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+
+    private static IAppAuthorizationService NewAuthService(AppDbContext db) =>
+        new AuthorizationService(db, NullLogger<AuthorizationService>.Instance);
 
     private static ClaimsPrincipal ParentPrincipal(Guid userId, Guid sessionId, Guid wardId) => new(new ClaimsIdentity(
         [
@@ -45,7 +49,7 @@ public class WardAccessFilterTests
         var requestedStudentId = Guid.NewGuid();
         // Deliberately no ParentWards link and no matching session — caller is unauthorized.
 
-        var filter = new WardAccessFilter(db);
+        var filter = new WardAccessFilter(db, NewAuthService(db));
         var context = NewContext(ParentPrincipal(parentId, sessionId, requestedStudentId), requestedStudentId);
 
         var called = false;
@@ -73,7 +77,7 @@ public class WardAccessFilterTests
         db.UserSessions.Add(new UserSession { Id = sessionId, UserId = parentId, IsActive = true });
         await db.SaveChangesAsync();
 
-        var filter = new WardAccessFilter(db);
+        var filter = new WardAccessFilter(db, NewAuthService(db));
         var context = NewContext(ParentPrincipal(parentId, sessionId, studentId), studentId);
 
         var called = false;

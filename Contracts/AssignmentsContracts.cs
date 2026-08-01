@@ -85,3 +85,13 @@ public record PlagiarismReportDto(
     string? CopyleaksScanId,
     IReadOnlyList<string> MatchedSources,
     DateTime CheckedAt);
+
+// AIS-05: AI-content detection via Pangram. Unlike AIS-02's async Copyleaks flow, Pangram's
+// classifier call is synchronous — one request returns the persisted report directly, no
+// separate "accepted"/pending status DTO needed.
+public record AiDetectionReportDto(
+    Guid Id,
+    Guid SubmissionId,
+    decimal AiLikelihoodScore,
+    string? PangramReportId,
+    DateTime CheckedAt);

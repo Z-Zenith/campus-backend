@@ -105,15 +105,29 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
             return BadRequest(new { error = "name_required", message = "Group name must not be empty." });
         }
 
-        if (request.SectionId is not null && !await db.Sections.AnyAsync(s => s.Id == request.SectionId))
-        {
-            return BadRequest(new { error = "unknown_section", message = "No section exists with that id." });
-        }
-
         var creator = await db.Users.FindAsync(userId);
         if (creator is null)
         {
             return Unauthorized();
+        }
+
+        if (request.SectionId is not null)
+        {
+            // #33: SectionId previously only had to exist — not belong to the caller's own
+            // college — so a group could end up with a CollegeId/SectionId pair spanning two
+            // different colleges.
+            var sectionCollegeId = await db.Sections
+                .Where(s => s.Id == request.SectionId)
+                .Select(s => (Guid?)s.Department.CollegeId)
+                .FirstOrDefaultAsync();
+            if (sectionCollegeId is null)
+            {
+                return BadRequest(new { error = "unknown_section", message = "No section exists with that id." });
+            }
+            if (sectionCollegeId != creator.CollegeId)
+            {
+                return Forbid();
+            }
         }
 
         var group = new Group
@@ -286,13 +300,38 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
         {
             return BadRequest(new { error = "target_required", message = "Attach material to a subject, a group, or both." });
         }
-        if (request.SubjectId is not null && !await db.Subjects.AnyAsync(s => s.Id == request.SubjectId))
+        if (request.SubjectId is not null)
         {
-            return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
+            // #25: SubjectId previously only had to exist — not belong to the uploader's own
+            // college — letting a teacher attach material to another college's subject feed.
+            var subjectCollegeId = await db.Subjects
+                .Where(s => s.Id == request.SubjectId)
+                .Select(s => (Guid?)s.Department.CollegeId)
+                .FirstOrDefaultAsync();
+            if (subjectCollegeId is null)
+            {
+                return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
+            }
+            if (subjectCollegeId != uploader.CollegeId)
+            {
+                return Forbid();
+            }
         }
-        if (request.GroupId is not null && !await db.Groups.AnyAsync(g => g.Id == request.GroupId))
+        if (request.GroupId is not null)
         {
-            return BadRequest(new { error = "unknown_group", message = "No group exists with that id." });
+            // #25: same college-ownership check for GroupId.
+            var groupCollegeId = await db.Groups
+                .Where(g => g.Id == request.GroupId)
+                .Select(g => (Guid?)g.CollegeId)
+                .FirstOrDefaultAsync();
+            if (groupCollegeId is null)
+            {
+                return BadRequest(new { error = "unknown_group", message = "No group exists with that id." });
+            }
+            if (groupCollegeId != uploader.CollegeId)
+            {
+                return Forbid();
+            }
         }
 
         var material = new Material
@@ -355,9 +394,23 @@ public class CommunityController(AppDbContext db, IPermissionService permissions
 
     private async Task<bool> CanViewMaterialAsync(Material material, User caller)
     {
-        if (material.UploadedBy == caller.Id || caller.AccountType == AccountType.AdminTier)
+        if (material.UploadedBy == caller.Id)
         {
             return true;
+        }
+
+        // #11: AdminTier previously bypassed every other check unconditionally, letting an
+        // Admin from any college download material belonging to a different college's
+        // group/subject. Still an unconditional bypass, but only within the admin's own
+        // college — resolved via the same group/subject chain the non-Admin checks below use.
+        if (caller.AccountType == AccountType.AdminTier)
+        {
+            var materialCollegeId = material.GroupId is not null
+                ? await db.Groups.Where(g => g.Id == material.GroupId).Select(g => (Guid?)g.CollegeId).FirstOrDefaultAsync()
+                : material.SubjectId is not null
+                    ? await db.Subjects.Where(s => s.Id == material.SubjectId).Select(s => (Guid?)s.Department.CollegeId).FirstOrDefaultAsync()
+                    : null;
+            return materialCollegeId == caller.CollegeId;
         }
 
         if (material.GroupId is not null)

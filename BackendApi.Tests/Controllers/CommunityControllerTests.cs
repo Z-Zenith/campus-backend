@@ -76,6 +76,43 @@ public class CommunityControllerTests
         Assert.IsType<MaterialDto>(ok.Value);
     }
 
+    // #25: SubjectId previously only had to exist — not belong to the uploader's own
+    // college — letting a teacher attach material to another college's subject feed.
+    [Fact]
+    public async Task Issue25_UploadMaterial_ForbidsSubjectFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "CS" };
+        var otherSubject = new Subject { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Code = "CS101", Name = "Intro" };
+        db.Departments.Add(otherDepartment);
+        db.Subjects.Add(otherSubject);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://storage.campus.local/x.pdf", otherSubject.Id, null));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.Materials.ToListAsync());
+    }
+
+    // #25: same college-ownership check for GroupId.
+    [Fact]
+    public async Task Issue25_UploadMaterial_ForbidsGroupFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var teacher = await SeedTeacherAsync(db);
+        var otherGroup = new Group { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "Other College Group", Type = GroupType.Club };
+        db.Groups.Add(otherGroup);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, teacher, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.UploadMaterial(new CreateMaterialRequest("Notes", "https://storage.campus.local/x.pdf", null, otherGroup.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.Materials.ToListAsync());
+    }
+
     [Fact]
     public async Task DownloadMaterial_Redirects_WhenFileHostIsOnAllowlist()
     {
@@ -123,6 +160,85 @@ public class CommunityControllerTests
         Assert.IsNotType<RedirectResult>(result);
         var statusResult = Assert.IsType<ObjectResult>(result);
         Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
+    }
+
+    // #11: AdminTier previously bypassed CanViewMaterialAsync unconditionally, letting any
+    // Admin from any college download material belonging to a different college's subject.
+    [Fact]
+    public async Task Issue11_DownloadMaterial_ForbidsAdminFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var uploader = await SeedTeacherAsync(db);
+        var otherCollegeAdmin = new User
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = Guid.NewGuid(),
+            Identifier = "admin-1",
+            PasswordHash = "hash",
+            FullName = "Other College Admin",
+            IsActive = true,
+            AccountType = AccountType.AdminTier,
+        };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = uploader.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Notes",
+            FileUrl = "https://storage.campus.local/x.pdf",
+            SubjectId = subject.Id,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.Add(otherCollegeAdmin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, otherCollegeAdmin, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        Assert.IsType<ForbidResult>(result);
+    }
+
+    // #11: an Admin from the SAME college as the material may still download it.
+    [Fact]
+    public async Task Issue11_DownloadMaterial_AllowsAdminFromSameCollege()
+    {
+        await using var db = NewDb();
+        var uploader = await SeedTeacherAsync(db);
+        var sameCollegeAdmin = new User
+        {
+            Id = Guid.NewGuid(),
+            CollegeId = uploader.CollegeId,
+            Identifier = "admin-2",
+            PasswordHash = "hash",
+            FullName = "Same College Admin",
+            IsActive = true,
+            AccountType = AccountType.AdminTier,
+        };
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = uploader.CollegeId, Name = "CS" };
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var material = new Material
+        {
+            Id = Guid.NewGuid(),
+            Title = "Notes",
+            FileUrl = "https://storage.campus.local/x.pdf",
+            SubjectId = subject.Id,
+            UploadedBy = uploader.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        db.Users.Add(sameCollegeAdmin);
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Materials.Add(material);
+        await db.SaveChangesAsync();
+        var controller = ControllerAs(db, sameCollegeAdmin, ConfigWithAllowedHosts("storage.campus.local"));
+
+        var result = await controller.DownloadMaterial(material.Id);
+
+        Assert.IsType<RedirectResult>(result);
     }
 
     private static User NewUser(AccountType accountType, Guid? collegeId = null) => new()
@@ -236,6 +352,47 @@ public class CommunityControllerTests
         var result = await controller.CreateGroup(new CreateGroupRequest("Ghost Section Group", GroupType.SubjectSection, Guid.NewGuid()));
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    // #33: SectionId previously only had to exist — not belong to the caller's own college.
+    [Fact]
+    public async Task Issue33_CreateGroup_ForbidsSectionFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "CS" };
+        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Year = 1, Name = "A" };
+        db.Users.Add(teacher);
+        db.Departments.Add(otherDepartment);
+        db.Sections.Add(otherSection);
+        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.CreateGroup(new CreateGroupRequest("Cross College Group", GroupType.SubjectSection, otherSection.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.Groups.ToListAsync());
+    }
+
+    // #33: a section in the caller's own college is still accepted.
+    [Fact]
+    public async Task Issue33_CreateGroup_AllowsSectionFromCallersOwnCollege()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = teacher.CollegeId, Name = "CS" };
+        var section = new Section { Id = Guid.NewGuid(), DepartmentId = department.Id, Year = 1, Name = "A" };
+        db.Users.Add(teacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.PermissionGrants.Add(GrantCreateGroup(teacher.Id));
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, teacher);
+        var result = await controller.CreateGroup(new CreateGroupRequest("Same College Group", GroupType.SubjectSection, section.Id));
+
+        Assert.IsType<OkObjectResult>(result.Result);
     }
 
     // SDA-16

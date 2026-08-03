@@ -9,6 +9,7 @@ using BackendApi.Tests.Fakes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BackendApi.Tests.Controllers;
 
@@ -35,7 +36,7 @@ public class SyllabusControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new SyllabusController(db, aiServices ?? new FakeAiServicesClient())
+        return new SyllabusController(db, aiServices ?? new FakeAiServicesClient(), NullLogger<SyllabusController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -147,5 +148,24 @@ public class SyllabusControllerTests
         var result = await controller.Extract(FakePdfFile(), CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    // #30: an AI-service outage (connection refused/timeout) must degrade to a clean 503,
+    // not bubble up as an unstructured 500 — matching TelemetryController's established
+    // HttpRequestException/TaskCanceledException/JsonException catch pattern.
+    [Fact]
+    public async Task Extract_ReturnsServiceUnavailable_WhenAiServicesIsUnreachable()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        db.Users.Add(teacher);
+        await db.SaveChangesAsync();
+        var fakeAi = new FakeAiServicesClient { ThrowServiceUnavailable = true };
+        var controller = ControllerAs(db, teacher, fakeAi);
+
+        var result = await controller.Extract(FakePdfFile(), CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, objectResult.StatusCode);
     }
 }

@@ -68,6 +68,28 @@ public class RolesController(AppDbContext db, IPermissionService permissions, IC
         {
             return BadRequest("DepartmentId must be null for a global-scoped binding.");
         }
+        if (request.DepartmentId is { } requestedDepartmentId)
+        {
+            // #19: DepartmentId was previously only checked for null-consistency with
+            // ScopeType, never resolved to a college. Every downstream consumer of
+            // PermissionService.GetDepartmentScopeAsync (TimetableController.Generate/
+            // PatchSlot, MarksController.PendingExternal/ApproveExternal, ...) treats "the
+            // caller has a non-null department scope" as sufficient authority with no college
+            // check of its own — a poisoned cross-college DepartmentId here grants the bound
+            // user department-scoped authority over another college entirely.
+            var departmentCollegeId = await db.Departments
+                .Where(d => d.Id == requestedDepartmentId)
+                .Select(d => (Guid?)d.CollegeId)
+                .FirstOrDefaultAsync();
+            if (departmentCollegeId is null)
+            {
+                return BadRequest("Unknown department.");
+            }
+            if (departmentCollegeId != user.CollegeId)
+            {
+                return Forbid();
+            }
+        }
 
         var binding = new RoleBinding
         {

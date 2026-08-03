@@ -315,7 +315,10 @@ public class FeesControllerTests
         db.PermissionGrants.Add(GrantManageFees(finance.Id));
         await db.SaveChangesAsync();
 
-        var dueDate = new DateOnly(2026, 8, 1);
+        // A clearly-future date relative to "now" (not a hardcoded calendar date, which
+        // eventually becomes the past and starts tripping CreateLink's "not in the past"
+        // guard for reasons unrelated to what this test actually covers).
+        var dueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30));
         var controller = ControllerAs(db, finance);
         var result = await controller.CreateLink(new CreateFeeLinkRequest(student.Id, 7500m, dueDate));
 
@@ -346,8 +349,8 @@ public class FeesControllerTests
         await db.SaveChangesAsync();
 
         var controller = ControllerAs(db, admin);
-        var first = await controller.CreateLink(new CreateFeeLinkRequest(student.Id, 1000m, new DateOnly(2026, 8, 1)));
-        var second = await controller.CreateLink(new CreateFeeLinkRequest(student.Id, 2000m, new DateOnly(2026, 9, 1)));
+        var first = await controller.CreateLink(new CreateFeeLinkRequest(student.Id, 1000m, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30))));
+        var second = await controller.CreateLink(new CreateFeeLinkRequest(student.Id, 2000m, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(60))));
 
         var firstResponse = (FeeLinkResponse)((OkObjectResult)first.Result!).Value!;
         var secondResponse = (FeeLinkResponse)((OkObjectResult)second.Result!).Value!;
@@ -377,7 +380,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -408,7 +411,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -439,7 +442,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -468,7 +471,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -499,7 +502,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -534,7 +537,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -565,7 +568,7 @@ public class FeesControllerTests
     {
         await using var db = NewDb();
         var admin = NewUser(AccountType.AdminTier);
-        var student = NewUser(AccountType.Student);
+        var student = NewUser(AccountType.Student, admin.CollegeId);
         var parent = NewUser(AccountType.Parent);
         db.Users.AddRange(admin, student, parent);
         db.PermissionGrants.Add(GrantManageFees(admin.Id));
@@ -581,5 +584,36 @@ public class FeesControllerTests
         var response = Assert.IsType<SendFeeRemindersResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(1, response.RemindersSent);
         Assert.Single(await db.Notifications.Where(n => n.RecipientId == parent.Id).ToListAsync());
+    }
+
+    // #28: manage_fees is checked globally — without a CollegeId filter on the FeeRecords
+    // scan, a single college's finance user would blast reminders to every other college's
+    // parents platform-wide.
+    [Fact]
+    public async Task Awa05_SendReminders_DoesNotNotifyForFeeAtAnotherCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var otherCollegeStudent = NewUser(AccountType.Student); // different (random) college
+        var otherCollegeParent = NewUser(AccountType.Parent);
+        db.Users.AddRange(admin, otherCollegeStudent, otherCollegeParent);
+        db.PermissionGrants.Add(GrantManageFees(admin.Id));
+        db.ParentWards.Add(new ParentWard { Id = Guid.NewGuid(), ParentUserId = otherCollegeParent.Id, StudentId = otherCollegeStudent.Id, CreatedAt = DateTime.UtcNow });
+        db.FeeRecords.Add(new FeeRecord
+        {
+            Id = Guid.NewGuid(),
+            StudentId = otherCollegeStudent.Id,
+            Amount = 5000m,
+            DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
+            Status = FeeStatus.Pending,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.SendReminders();
+
+        var response = Assert.IsType<SendFeeRemindersResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(0, response.RemindersSent);
+        Assert.Empty(await db.Notifications.ToListAsync());
     }
 }

@@ -54,7 +54,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return BadRequest(new { error = "unknown_subject", message = "No subject exists with that id." });
         }
-        if (caller.AccountType is not AccountType.AdminTier && subject.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, subject.Id, subject.TeacherId))
         {
             return Forbid();
         }
@@ -310,7 +310,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, submission.Assignment.SubjectId, submission.Assignment.TeacherId))
         {
             return Forbid();
         }
@@ -354,7 +354,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, submission.Assignment.SubjectId, submission.Assignment.TeacherId))
         {
             return Forbid();
         }
@@ -391,7 +391,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && assignment.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, assignment.SubjectId, assignment.TeacherId))
         {
             return Forbid();
         }
@@ -446,7 +446,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && submission.Assignment.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, submission.Assignment.SubjectId, submission.Assignment.TeacherId))
         {
             return Forbid();
         }
@@ -497,7 +497,7 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         {
             return NotFound();
         }
-        if (caller.AccountType is not AccountType.AdminTier && suggestion.Submission.Assignment.TeacherId != caller.Id)
+        if (!await IsAuthorizedForAssignmentResourceAsync(caller, suggestion.Submission.Assignment.SubjectId, suggestion.Submission.Assignment.TeacherId))
         {
             return Forbid();
         }
@@ -509,24 +509,36 @@ public class AssignmentsController(AppDbContext db, IAiServicesClient aiServices
         return Ok(new ConfirmedGradeDto(suggestion.Id, suggestion.SubmissionId, suggestion.SuggestedGrade, suggestion.ConfirmedByTeacher, suggestion.ConfirmedAt));
     }
 
-    // #135: a student is "enrolled in this assignment's subject" if they're a member of
-    // any section that subject is actually taught to — same TeacherSectionAssignments +
-    // SectionEnrollments join MarksController.CreateInternal uses to scope teacher writes,
-    // applied here to scope student submissions instead.
-    private async Task<bool> IsEnrolledInAssignmentSubjectAsync(Guid studentId, Guid subjectId)
+    // #11: every "the assignment's own teacher, or Admin" gate in this controller previously
+    // let AdminTier bypass unconditionally, regardless of which college the admin actually
+    // belongs to. Still an Admin-can-always-act rule, but now scoped to the admin's own
+    // college via the resource's subject -> department -> college chain, mirroring the
+    // college-scoping convention used elsewhere (CollegeScopeService et al.).
+    private async Task<bool> IsAuthorizedForAssignmentResourceAsync(User caller, Guid subjectId, Guid? resourceTeacherId)
     {
-        var taughtSectionIds = await db.TeacherSectionAssignments
-            .Where(a => a.SubjectId == subjectId)
-            .Select(a => a.SectionId)
-            .ToListAsync();
-        if (taughtSectionIds.Count == 0)
+        if (resourceTeacherId == caller.Id)
+        {
+            return true;
+        }
+        if (caller.AccountType != AccountType.AdminTier)
         {
             return false;
         }
 
-        return await db.SectionEnrollments
-            .AnyAsync(e => e.StudentId == studentId && taughtSectionIds.Contains(e.SectionId));
+        var subjectCollegeId = await db.Subjects
+            .Where(s => s.Id == subjectId)
+            .Select(s => (Guid?)s.Department.CollegeId)
+            .FirstOrDefaultAsync();
+        return subjectCollegeId == caller.CollegeId;
     }
+
+    // #135: a student is "enrolled in this assignment's subject" if they're a member of
+    // any section that subject is actually taught to — same TeacherSectionAssignments +
+    // SectionEnrollments join MarksController.CreateInternal uses to scope teacher writes,
+    // applied here to scope student submissions instead. #32: extracted to
+    // Services/AssignmentEnrollment so TelemetryController can enforce the identical rule.
+    private Task<bool> IsEnrolledInAssignmentSubjectAsync(Guid studentId, Guid subjectId) =>
+        AssignmentEnrollment.IsEnrolledInAssignmentSubjectAsync(db, studentId, subjectId);
 
     private static bool IsValidJson(string value)
     {

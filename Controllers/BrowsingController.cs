@@ -558,6 +558,22 @@ public class BrowsingController(AppDbContext db, IAiServicesClient aiServices, I
         {
             return Forbid();
         }
+        // #22: the AdminTier branch above was an unconditional cross-college bypass — an
+        // Admin at College A could target a classSessionId/assignmentId belonging to College
+        // B and this endpoint would RemoveRange College B's existing flags, ship College B's
+        // telemetry to the external AI service, and write new flags against College B
+        // students. Clamp to the admin's own college via the scoped teacher's college.
+        if (caller.AccountType is AccountType.AdminTier)
+        {
+            var scopeTeacherCollegeId = await db.Users
+                .Where(u => u.Id == scopeTeacherId)
+                .Select(u => (Guid?)u.CollegeId)
+                .FirstOrDefaultAsync();
+            if (scopeTeacherCollegeId != caller.CollegeId)
+            {
+                return Forbid();
+            }
+        }
 
         var telemetry = await db.UsageTelemetries
             .Where(t => (classSessionId != null && t.ClassSessionId == classSessionId)

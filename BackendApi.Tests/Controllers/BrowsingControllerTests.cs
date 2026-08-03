@@ -533,6 +533,49 @@ public class BrowsingControllerTests
         Assert.Empty(await db.SuspiciousFlags.ToListAsync());
     }
 
+    // #22: the AdminTier branch had no college comparison at all — an AdminTier account at
+    // College A could target an assignmentId belonging to College B and this endpoint would
+    // RemoveRange College B's existing flags, ship College B's telemetry externally, and
+    // write new flags against College B students.
+    [Fact]
+    public async Task Issue22_SuspiciousFlags_ForbidsAdminFromAnotherCollegeTargetingAnAssignment()
+    {
+        await using var db = NewDb();
+        var otherCollegeTeacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student, otherCollegeTeacher.CollegeId);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = otherCollegeTeacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = DateTime.UtcNow.AddDays(7), SubmissionWindowStart = DateTime.UtcNow, SubmissionWindowEnd = DateTime.UtcNow.AddDays(7) };
+        var admin = NewUser(AccountType.AdminTier); // random (different) college than otherCollegeTeacher
+        db.Users.AddRange(otherCollegeTeacher, student, admin);
+        db.Assignments.Add(assignment);
+        db.SuspiciousFlags.Add(new SuspiciousFlag { Id = Guid.NewGuid(), StudentId = student.Id, AssignmentId = assignment.Id, ConfidenceScore = 0.9m, FlaggedAt = DateTime.UtcNow.AddDays(-1) });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin, new FakeAiServicesClient());
+        var result = await controller.SuspiciousFlags(classSessionId: null, assignmentId: assignment.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+        // The existing flag for the other college's student must survive untouched.
+        Assert.Single(await db.SuspiciousFlags.ToListAsync());
+    }
+
+    // #22: an Admin from the SAME college as the assignment's teacher may still run this.
+    [Fact]
+    public async Task Issue22_SuspiciousFlags_AllowsAdminFromSameCollegeAsAssignmentsTeacher()
+    {
+        await using var db = NewDb();
+        var teacher = NewUser(AccountType.Teacher);
+        var admin = NewUser(AccountType.AdminTier, teacher.CollegeId);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = Guid.NewGuid(), TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = DateTime.UtcNow.AddDays(7), SubmissionWindowStart = DateTime.UtcNow, SubmissionWindowEnd = DateTime.UtcNow.AddDays(7) };
+        db.Users.AddRange(teacher, admin);
+        db.Assignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin, new FakeAiServicesClient());
+        var result = await controller.SuspiciousFlags(classSessionId: null, assignmentId: assignment.Id);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+    }
+
     // AIS-01: "a role without that permission cannot see the summary anywhere, including
     // in the student's own profile view" — no self-view exception, even for Admin viewing
     // their own (irrelevant) summary or a student viewing their own.

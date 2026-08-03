@@ -115,6 +115,56 @@ public class RolesControllerTests
         Assert.DoesNotContain(db.RoleBindings.Local, b => b.UserId == target.Id);
     }
 
+    // #19: DepartmentId was previously only checked for null-consistency with ScopeType,
+    // never resolved to a college — a poisoned cross-college DepartmentId here grants the
+    // bound user department-scoped authority (PermissionService.GetDepartmentScopeAsync)
+    // over another college entirely (TimetableController.Generate/PatchSlot,
+    // MarksController.PendingExternal/ApproveExternal all trust that scope with no college
+    // check of their own).
+    [Fact]
+    public async Task Issue19_CreateRoleBinding_ForbidsDepartmentFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var admin = NewUser();
+        var target = NewUser();
+        target.CollegeId = admin.CollegeId;
+        var otherCollegeDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "CS" };
+        db.Users.AddRange(admin, target);
+        db.Departments.Add(otherCollegeDepartment);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(target.Id, "lecturer", ScopeKind.Department, otherCollegeDepartment.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.DoesNotContain(db.RoleBindings.Local, b => b.UserId == target.Id && b.RoleCode == "lecturer");
+    }
+
+    // #19: a department in the caller's own college is still accepted.
+    [Fact]
+    public async Task Issue19_CreateRoleBinding_AllowsDepartmentFromCallersOwnCollege()
+    {
+        await using var db = NewDb();
+        await SeedRolesAndPermissionsAsync(db);
+        var admin = NewUser();
+        var target = NewUser();
+        target.CollegeId = admin.CollegeId;
+        var department = new Department { Id = Guid.NewGuid(), CollegeId = admin.CollegeId, Name = "CS" };
+        db.Users.AddRange(admin, target);
+        db.Departments.Add(department);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = admin.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin.Id);
+        var result = await controller.CreateRoleBinding(new CreateRoleBindingRequest(target.Id, "lecturer", ScopeKind.Department, department.Id));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<RoleBindingDto>(ok.Value);
+        Assert.Equal(department.Id, dto.DepartmentId);
+    }
+
     // AWA-13
     [Fact]
     public async Task DeletePermissionGrant_RevokedOverrideStopsApplyingImmediately()

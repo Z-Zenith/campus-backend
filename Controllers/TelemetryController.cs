@@ -7,6 +7,7 @@ using BackendApi.Data.Entities;
 using BackendApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace BackendApi.Controllers;
 
@@ -47,6 +48,14 @@ public class TelemetryController(AppDbContext db, IHttpClientFactory httpClientF
         // class-window events queued from the same short polling interval.
         var activeSession = await ClassSessionLookup.FindOrStartActiveSessionAsync(db, studentId, DateTime.UtcNow);
 
+        // #32: AssignmentId is client-supplied and previously never checked against the
+        // submitting student's actual enrollment — unlike Submit/AutoSubmit
+        // (AssignmentsController.IsEnrolledInAssignmentSubjectAsync), a student could pollute
+        // any other college's assignment telemetry window just by naming its AssignmentId.
+        // Cached per-assignment since a single batch commonly repeats the same id across
+        // several events.
+        var assignmentSubjectCache = new Dictionary<Guid, Guid?>();
+
         var records = new List<UsageTelemetry>();
         var resolvedEvents = new List<(TelemetryEventRequest Event, Guid? ClassSessionId)>();
         foreach (var e in events)
@@ -55,6 +64,29 @@ public class TelemetryController(AppDbContext db, IHttpClientFactory httpClientF
             if (e.AssignmentId is null && classSessionId is null)
             {
                 return BadRequest(new { error = "window_required", message = "No active class session or assignment for this event." });
+            }
+
+            if (e.AssignmentId is { } assignmentId)
+            {
+                if (!assignmentSubjectCache.TryGetValue(assignmentId, out var subjectId))
+                {
+                    subjectId = await db.Assignments
+                        .Where(a => a.Id == assignmentId)
+                        .Select(a => (Guid?)a.SubjectId)
+                        .FirstOrDefaultAsync();
+                    assignmentSubjectCache[assignmentId] = subjectId;
+                }
+
+                var enrolled = subjectId is not null
+                    && await AssignmentEnrollment.IsEnrolledInAssignmentSubjectAsync(db, studentId, subjectId.Value);
+                if (!enrolled)
+                {
+                    return BadRequest(new
+                    {
+                        error = "invalid_assignment",
+                        message = "AssignmentId must reference an assignment you are enrolled in.",
+                    });
+                }
             }
 
             records.Add(new UsageTelemetry

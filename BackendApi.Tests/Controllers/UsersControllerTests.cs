@@ -291,6 +291,119 @@ public class UsersControllerTests
         Assert.IsType<CreatedAtActionResult>(result.Result);
     }
 
+    // #34: manage_accounts (typically "it") must not be sufficient on its own to mint a new
+    // AdminTier account — that's an in-college privilege escalation. Only a caller who
+    // themselves holds the "admin" role may do so.
+    [Fact]
+    public async Task Issue34_Create_ForbidsCreatingAdminTierAccount_WithoutAdminRole()
+    {
+        await using var db = NewDb();
+        var itCaller = NewUser(AccountType.AdminTier);
+        db.Users.Add(itCaller);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = itCaller.Id,
+            PermissionCode = "manage_accounts",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = itCaller.Id, RoleCode = "it", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, itCaller);
+        var result = await controller.Create(new CreateUserRequest(
+            itCaller.CollegeId, AccountType.AdminTier, "new-admin", "initial-pass1", "New Admin", null));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.False(await db.Users.AnyAsync(u => u.Identifier == "new-admin"));
+    }
+
+    // #34: a caller who does hold the "admin" role may still create AdminTier accounts.
+    [Fact]
+    public async Task Issue34_Create_AllowsCreatingAdminTierAccount_WithAdminRole()
+    {
+        await using var db = NewDb();
+        var adminCaller = NewUser(AccountType.AdminTier);
+        db.Users.Add(adminCaller);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = adminCaller.Id,
+            PermissionCode = "manage_accounts",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = adminCaller.Id, RoleCode = "admin", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, adminCaller);
+        var result = await controller.Create(new CreateUserRequest(
+            adminCaller.CollegeId, AccountType.AdminTier, "new-admin", "initial-pass1", "New Admin", null));
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+    }
+
+    // #34: DepartmentId was never checked against the target college — a caller could
+    // attach a new account to another college's department.
+    [Fact]
+    public async Task Issue34_Create_RejectsDepartmentFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var admin = NewUser(AccountType.AdminTier);
+        var otherCollegeDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "CS" };
+        db.Users.Add(admin);
+        db.Departments.Add(otherCollegeDepartment);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = admin.Id,
+            PermissionCode = "manage_accounts",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, admin);
+        var result = await controller.Create(new CreateUserRequest(
+            admin.CollegeId, AccountType.Student, "new-student", "initial-pass1", "New Student", otherCollegeDepartment.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.False(await db.Users.AnyAsync(u => u.Identifier == "new-student"));
+    }
+
+    // #34: same in-college-escalation rule applies to ResetPassword as to Create — a
+    // reset_password holder without the "admin" role must not be able to take over an
+    // AdminTier account's password.
+    [Fact]
+    public async Task Issue34_ResetPassword_ForbidsResettingAdminTierAccount_WithoutAdminRole()
+    {
+        await using var db = NewDb();
+        var itCaller = NewUser(AccountType.AdminTier);
+        var target = NewUser(AccountType.AdminTier, itCaller.CollegeId);
+        db.Users.AddRange(itCaller, target);
+        db.PermissionGrants.Add(new PermissionGrant
+        {
+            Id = Guid.NewGuid(),
+            UserId = itCaller.Id,
+            PermissionCode = "reset_password",
+            Granted = true,
+            GrantedBy = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = itCaller.Id, RoleCode = "it", ScopeType = ScopeKind.Global, GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, itCaller);
+        var result = await controller.ResetPassword(target.Id, new ResetPasswordRequest("attacker-controlled-1"));
+
+        Assert.IsType<ForbidResult>(result);
+        Assert.Equal(target.PasswordHash, (await db.Users.FindAsync(target.Id))!.PasswordHash);
+    }
+
     // AWA-10 — same reasoning as Awa09_Create_ForbidsCallersWithoutManageAccountsPermission —
     // acceptance-critical that this doesn't allow arbitrary account takeover.
     [Fact]

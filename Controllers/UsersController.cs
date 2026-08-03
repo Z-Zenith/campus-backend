@@ -43,6 +43,31 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
             return Forbid();
         }
 
+        // #34: DepartmentId is client-supplied and previously never checked against the
+        // target college at all — a caller could attach a new account to another college's
+        // department even though the account itself lands in their own college.
+        if (request.DepartmentId is { } requestedDepartmentId)
+        {
+            var departmentCollegeId = await db.Departments
+                .Where(d => d.Id == requestedDepartmentId)
+                .Select(d => (Guid?)d.CollegeId)
+                .FirstOrDefaultAsync();
+            if (departmentCollegeId != request.CollegeId)
+            {
+                return BadRequest(new { error = "invalid_department", message = "DepartmentId must belong to the target college." });
+            }
+        }
+
+        // #34: manage_accounts holders (typically the "it" role) are not restricted in which
+        // AccountType they may create — an "it" caller could create (or, via ResetPassword
+        // below, take over) an AdminTier account within their own college, an in-college
+        // privilege escalation. Creating/resetting an AdminTier account now requires the
+        // caller to hold the "admin" role themselves, not just the manage_accounts permission.
+        if (request.AccountType == AccountType.AdminTier && !await HasAdminRoleAsync(caller.Id))
+        {
+            return Forbid();
+        }
+
         // #140: enforce a minimum strength policy before hashing, same as ResetPassword and
         // AuthController.ChangePassword — an account's very first password shouldn't be weaker
         // than what every later password change requires.
@@ -194,6 +219,13 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         {
             return Forbid();
         }
+        // #34: same in-college escalation as Create above — a reset_password holder (typically
+        // "it") must not be able to take over an AdminTier account's password unless they
+        // themselves hold the "admin" role.
+        if (user.AccountType == AccountType.AdminTier && !await HasAdminRoleAsync(caller.Id))
+        {
+            return Forbid();
+        }
 
         // #140: same minimum strength policy as account creation and self-service change.
         if (!PasswordPolicy.IsValid(request.NewPassword, out var passwordError))
@@ -223,4 +255,10 @@ public class UsersController(AppDbContext db, IPasswordHasher passwordHasher, IT
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub")!);
         return await db.Users.FindAsync(userId);
     }
+
+    // #34: "holds an equal-or-higher tier" — the only role that should be able to mint or
+    // take over another AdminTier account is one already carrying the "admin" role, not
+    // merely any global-scoped manage_accounts/reset_password holder (e.g. "it").
+    private async Task<bool> HasAdminRoleAsync(Guid userId) =>
+        await db.RoleBindings.AnyAsync(b => b.UserId == userId && b.RoleCode == "admin");
 }

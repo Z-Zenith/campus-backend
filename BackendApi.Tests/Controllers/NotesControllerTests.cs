@@ -296,6 +296,32 @@ public class NotesControllerTests
         Assert.Equal("See target", link.Anchor);
     }
 
+    // #31: SyncOutgoingLinksAsync previously only excluded self-links — any other note id,
+    // owned by anyone, was accepted as a link target. Combined with the client-supplied
+    // primary key on Create, that turned this into a note-id existence oracle and let a
+    // caller insert a link row pointing at a note they don't own.
+    [Fact]
+    public async Task Issue31_Update_SilentlyDropsLinksToNotesTheCallerDoesNotOwn()
+    {
+        await using var db = NewDb();
+        var owner = NewUser(AccountType.Student);
+        var otherStudent = NewUser(AccountType.Student);
+        var othersNote = new Note { Id = Guid.NewGuid(), OwnerId = otherStudent.Id, Title = "Private", ContentMarkdown = "x", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var source = new Note { Id = Guid.NewGuid(), OwnerId = owner.Id, Title = "Source", ContentMarkdown = "no links yet", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Users.AddRange(owner, otherStudent);
+        db.Notes.AddRange(othersNote, source);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, owner);
+        var result = await controller.Update(source.Id, new UpdateNoteRequest(
+            source.Title,
+            $"[[{othersNote.Id}|Sneaky link]]",
+            [new NoteLinkInput(othersNote.Id, "Sneaky link")]));
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        Assert.Empty(db.NoteLinks.Where(l => l.FromNoteId == source.Id));
+    }
+
     // SDA-19: a save with Links = null (e.g. a legacy SDA-08 clip-append call) must not
     // wipe out a link graph a prior full SEK-03 save already established for this note.
     [Fact]

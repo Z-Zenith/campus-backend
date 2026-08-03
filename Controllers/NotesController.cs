@@ -180,9 +180,25 @@ public class NotesController(AppDbContext db) : ControllerBase
         var deduped = links
             .Where(l => l.ToNoteId != fromNote.Id)
             .GroupBy(l => l.ToNoteId)
-            .Select(g => g.First());
+            .Select(g => g.First())
+            .ToList();
 
-        foreach (var link in deduped)
+        // #31: previously only self-links were excluded — any other note id, owned by
+        // anyone, was accepted as a link target. Combined with the client-supplied primary
+        // key on Create, that turned this into a note-id existence oracle and let a caller
+        // insert a link row pointing at a note they don't own. Only notes the caller (the
+        // FromNote's own owner) actually owns are valid link targets.
+        if (deduped.Count == 0)
+        {
+            return;
+        }
+        var candidateIds = deduped.Select(l => l.ToNoteId).ToList();
+        var ownedTargetIds = await db.Notes
+            .Where(n => candidateIds.Contains(n.Id) && n.OwnerId == fromNote.OwnerId)
+            .Select(n => n.Id)
+            .ToHashSetAsync();
+
+        foreach (var link in deduped.Where(l => ownedTargetIds.Contains(l.ToNoteId)))
         {
             db.NoteLinks.Add(new NoteLink
             {

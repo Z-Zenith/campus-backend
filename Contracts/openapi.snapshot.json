@@ -755,6 +755,87 @@
         }
       }
     },
+    "/api/v1/browser/classify": {
+      "post": {
+        "tags": [
+          "Browsing"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassifyUrlRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassifyUrlRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassifyUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassifyUrlResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassifyUrlResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassifyUrlResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/browser/classify/feedback": {
+      "post": {
+        "tags": [
+          "Browsing"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteFeedbackRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteFeedbackRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiteFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/students/{id}/browsing-summary": {
       "get": {
         "tags": [
@@ -1394,6 +1475,78 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/code/run-preview": {
+      "post": {
+        "tags": [
+          "CodeExecution"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPreviewRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPreviewRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreviewResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreviewResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreviewResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/code/run-preview/{sessionId}/stop": {
+      "post": {
+        "tags": [
+          "CodeExecution"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
           }
         }
       }
@@ -4928,6 +5081,81 @@
           }
         }
       },
+      "ClassifyUrlRequest": {
+        "required": [
+          "url",
+          "title",
+          "metaDescription",
+          "ogDescription",
+          "bodyText"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "metaDescription": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ogDescription": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "bodyText": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ClassifyUrlResponse": {
+        "required": [
+          "allowed",
+          "score",
+          "categories",
+          "source"
+        ],
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "score": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "categories": {
+            "type": "object",
+            "additionalProperties": {
+              "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+              "type": [
+                "number",
+                "string"
+              ],
+              "format": "double"
+            }
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
       "CodeFileDto": {
         "required": [
           "path",
@@ -7077,6 +7305,48 @@
           }
         }
       },
+      "RunPreviewRequest": {
+        "required": [
+          "entryFilePath",
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "entryFilePath": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CodeFileDto"
+            }
+          }
+        }
+      },
+      "RunPreviewResponse": {
+        "required": [
+          "sessionId",
+          "previewUrl",
+          "mode",
+          "isReady"
+        ],
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "previewUrl": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "isReady": {
+            "type": "boolean"
+          }
+        }
+      },
       "ScopeKind": {
         "enum": [
           "Global",
@@ -7231,6 +7501,21 @@
         "properties": {
           "completed": {
             "type": "boolean"
+          }
+        }
+      },
+      "SiteFeedbackRequest": {
+        "required": [
+          "url",
+          "feedback"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "feedback": {
+            "type": "string"
           }
         }
       },

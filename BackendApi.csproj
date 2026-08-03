@@ -38,6 +38,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!-- #8: Npgsql.EntityFrameworkCore.PostgreSQL 10.0.2 transitively floors
+         Microsoft.EntityFrameworkCore.Relational at 10.0.4, which conflicts with the
+         10.0.9 that Microsoft.EntityFrameworkCore.Design (above) and
+         Microsoft.EntityFrameworkCore.InMemory (BackendApi.Tests) require, producing an
+         MSB3277 assembly-version-conflict warning (and a latent assembly-version skew
+         risk) once BackendApi.Tests references this project. Pinning Relational directly
+         to 10.0.9 here makes every EF Core-family package in the graph resolve to the
+         same version. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
     <PackageReference Include="Microsoft.OpenApi" Version="2.10.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
     <PackageReference Include="Otp.NET" Version="1.4.1" />

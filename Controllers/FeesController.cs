@@ -161,6 +161,12 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
             return Forbid();
         }
 
+        // #28: manage_fees is checked globally, but the FeeRecords scan below had no
+        // CollegeId filter at all — a single college's finance user triggered fee-reminder
+        // notifications to every other college's parents platform-wide. Clamp to the
+        // caller's own college, matching CreateLink's existing college clamp in this file.
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+
         var reminderDaysBefore = configuration.GetValue("FeeReminder:DaysBeforeDue", 3);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var reminderCutoff = today.AddDays(reminderDaysBefore);
@@ -170,6 +176,7 @@ public class FeesController(AppDbContext db, IPermissionService permissions, ICo
         // (fee, parent) pair the reminder pass needs.
         var feesByParent = (await db.FeeRecords
                 .Where(f => f.Status == FeeStatus.Pending && f.DueDate >= today && f.DueDate <= reminderCutoff)
+                .Where(f => f.Student.CollegeId == callerCollegeId)
                 .Join(db.ParentWards, f => f.StudentId, p => p.StudentId, (f, p) => new { Fee = f, p.ParentUserId })
                 .ToListAsync())
             .GroupBy(x => x.ParentUserId, x => x.Fee)

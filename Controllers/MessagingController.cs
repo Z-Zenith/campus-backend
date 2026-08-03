@@ -49,6 +49,20 @@ public class MessagingController(AppDbContext db) : ControllerBase
             return BadRequest("TeacherId must reference an existing user with account type Teacher.");
         }
 
+        // #26: neither the student/teacher-caller path nor the AdminTier path checked that
+        // the student and teacher actually belong to the same college — a College A student
+        // (or an Admin from any college, per #11) could open a thread with a College B
+        // teacher. #11: an AdminTier caller must also be scoped to their own college, not an
+        // unconditional cross-college bypass.
+        if (student.CollegeId != teacher.CollegeId)
+        {
+            return BadRequest("StudentId and TeacherId must belong to the same college.");
+        }
+        if (caller.AccountType == AccountType.AdminTier && caller.CollegeId != student.CollegeId)
+        {
+            return Forbid();
+        }
+
         var existing = await db.MessageThreads
             .FirstOrDefaultAsync(t => t.StudentId == request.StudentId && t.TeacherId == request.TeacherId);
         if (existing is not null)
@@ -132,7 +146,7 @@ public class MessagingController(AppDbContext db) : ControllerBase
     [HttpGet("messages/threads/{id}/messages")]
     public async Task<ActionResult<List<MessageResponse>>> ListMessages(Guid id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
-        var thread = await db.MessageThreads.FindAsync(id);
+        var thread = await db.MessageThreads.Include(t => t.Student).FirstOrDefaultAsync(t => t.Id == id);
         if (thread is null)
         {
             return NotFound();
@@ -143,7 +157,12 @@ public class MessagingController(AppDbContext db) : ControllerBase
         {
             return Unauthorized();
         }
-        if (caller.AccountType is not AccountType.AdminTier && caller.Id != thread.StudentId && caller.Id != thread.TeacherId)
+        // #11: AdminTier previously bypassed this check unconditionally, letting any Admin
+        // read any thread's message history in any college. Still allowed to read threads
+        // outside their own participation, but only within their own college.
+        var isParticipant = caller.Id == thread.StudentId || caller.Id == thread.TeacherId;
+        var isSameCollegeAdmin = caller.AccountType == AccountType.AdminTier && caller.CollegeId == thread.Student.CollegeId;
+        if (!isParticipant && !isSameCollegeAdmin)
         {
             return Forbid();
         }

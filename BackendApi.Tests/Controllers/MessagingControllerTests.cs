@@ -92,8 +92,9 @@ public class MessagingControllerTests
     {
         var dbName = Guid.NewGuid().ToString();
         await using var seedDb = NewDb(dbName);
-        var student = NewUser(AccountType.Student);
-        var teacher = NewUser(AccountType.Teacher);
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
         seedDb.Users.AddRange(student, teacher);
         await seedDb.SaveChangesAsync();
 
@@ -124,8 +125,9 @@ public class MessagingControllerTests
     {
         var dbName = Guid.NewGuid().ToString();
         await using var db = NewDb(dbName);
-        var student = NewUser(AccountType.Student);
-        var teacher = NewUser(AccountType.Teacher);
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
         db.Users.AddRange(student, teacher);
         db.MessageThreads.Add(new MessageThread { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
@@ -135,6 +137,85 @@ public class MessagingControllerTests
 
         Assert.IsType<OkObjectResult>(result.Result);
         Assert.Single(await db.MessageThreads.ToListAsync());
+    }
+
+    // #26: neither the participant-caller path nor the AdminTier path checked that the
+    // student and teacher actually belong to the same college.
+    [Fact]
+    public async Task Issue26_CreateThread_ForbidsCrossCollegeStudentAndTeacher()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var student = NewUser(AccountType.Student);
+        var teacher = NewUser(AccountType.Teacher); // different (random) college than student
+        db.Users.AddRange(student, teacher);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, student);
+        var result = await controller.CreateThread(new CreateThreadRequest(student.Id, teacher.Id));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Empty(await db.MessageThreads.ToListAsync());
+    }
+
+    // #11: an AdminTier caller must also be scoped to their own college, not an
+    // unconditional cross-college bypass.
+    [Fact]
+    public async Task Issue11_CreateThread_ForbidsAdminFromAnotherCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var otherCollegeAdmin = NewUser(AccountType.AdminTier);
+        db.Users.AddRange(student, teacher, otherCollegeAdmin);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherCollegeAdmin);
+        var result = await controller.CreateThread(new CreateThreadRequest(student.Id, teacher.Id));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.MessageThreads.ToListAsync());
+    }
+
+    // #11: an AdminTier caller from the same college may still create the thread.
+    [Fact]
+    public async Task Issue11_CreateThread_AllowsAdminFromSameCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var sameCollegeAdmin = NewUser(AccountType.AdminTier, collegeId);
+        db.Users.AddRange(student, teacher, sameCollegeAdmin);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, sameCollegeAdmin);
+        var result = await controller.CreateThread(new CreateThreadRequest(student.Id, teacher.Id));
+
+        // A brand-new thread creation returns CreatedAtAction, not Ok (Ok is only returned
+        // for the "thread already exists" get-or-create path).
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+    }
+
+    // #11: ListMessages previously let AdminTier bypass unconditionally, letting any Admin
+    // read any thread's message history in any college.
+    [Fact]
+    public async Task Issue11_ListMessages_ForbidsAdminFromAnotherCollege()
+    {
+        await using var db = NewDb(Guid.NewGuid().ToString());
+        var collegeId = Guid.NewGuid();
+        var student = NewUser(AccountType.Student, collegeId);
+        var teacher = NewUser(AccountType.Teacher, collegeId);
+        var otherCollegeAdmin = NewUser(AccountType.AdminTier);
+        var thread = new MessageThread { Id = Guid.NewGuid(), StudentId = student.Id, TeacherId = teacher.Id, CreatedAt = DateTime.UtcNow };
+        db.Users.AddRange(student, teacher, otherCollegeAdmin);
+        db.MessageThreads.Add(thread);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherCollegeAdmin);
+        var result = await controller.ListMessages(thread.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
     }
 
     // #159: ListMessages should paginate rather than always returning every message ever

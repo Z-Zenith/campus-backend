@@ -329,6 +329,53 @@ public class AssignmentsControllerTests
         Assert.IsType<ForbidResult>(result.Result);
     }
 
+    // #11: AdminTier previously bypassed the "assignment's own teacher, or Admin" gate
+    // unconditionally, letting any Admin from any college run/read a copy-check against
+    // another college's assignment.
+    [Fact]
+    public async Task Issue11_CopyCheck_ForbidsAdminFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var otherCollegeAdmin = NewUser(AccountType.AdminTier); // random college, different from department.CollegeId
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Users.AddRange(teacher, otherCollegeAdmin);
+        db.Assignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, otherCollegeAdmin);
+        var result = await controller.CopyCheck(assignment.Id);
+
+        Assert.IsType<ForbidResult>(result.Result);
+    }
+
+    // #11: an Admin from the SAME college as the assignment's subject may still act on it.
+    [Fact]
+    public async Task Issue11_CopyCheck_AllowsAdminFromSameCollege()
+    {
+        await using var db = NewDb();
+        var department = NewDepartment();
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var teacher = NewUser(AccountType.Teacher);
+        var assignment = new Assignment { Id = Guid.NewGuid(), SubjectId = subject.Id, TeacherId = teacher.Id, Title = "A1", Type = AssignmentType.Code, DueDate = new DateTime(2026, 8, 15), SubmissionWindowStart = new DateTime(2026, 8, 1), SubmissionWindowEnd = new DateTime(2026, 8, 15) };
+        var sameCollegeAdmin = NewUser(AccountType.AdminTier);
+        sameCollegeAdmin.CollegeId = department.CollegeId;
+        db.Departments.Add(department);
+        db.Subjects.Add(subject);
+        db.Users.AddRange(teacher, sameCollegeAdmin);
+        db.Assignments.Add(assignment);
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, sameCollegeAdmin);
+        var result = await controller.CopyCheck(assignment.Id);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+    }
+
     [Fact]
     public async Task Ais03_CopyCheck_PersistsFlaggedMatchesFromAiServices()
     {

@@ -231,8 +231,24 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
 
         if (request.TeacherId is { } teacherId)
         {
+            // #23: previously applied with zero validation — no check that the target user
+            // exists, is actually AccountType.Teacher, or belongs to the slot's own college.
+            // Every downstream "am I the slot's teacher" gate (Roster, MarkAttendance) trusts
+            // TimetableSlot.TeacherId as authoritative, so an unvalidated reassignment let a
+            // create_timetable holder hand roster/attendance access to any user id, including
+            // a student.
+            var newTeacher = await db.Users.FindAsync(teacherId);
+            if (newTeacher is null || newTeacher.AccountType != AccountType.Teacher || newTeacher.CollegeId != slot.Section.Department.CollegeId)
+            {
+                return BadRequest(new
+                {
+                    error = "invalid_teacher",
+                    message = "TeacherId must reference an existing Teacher account in the slot's own college.",
+                });
+            }
+
             slot.TeacherId = teacherId;
-            slot.Teacher = await db.Users.FindAsync(teacherId) ?? slot.Teacher;
+            slot.Teacher = newTeacher;
         }
         if (request.DayOfWeek is { } dayOfWeek) slot.DayOfWeek = dayOfWeek;
         if (request.StartTime is { } startTime) slot.StartTime = startTime;
@@ -264,6 +280,22 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
     public async Task<ActionResult<ChangeRequestDto>> CreateChangeRequest(CreateChangeRequestRequest request)
     {
         var userId = CurrentUserId();
+
+        // #27: previously had no role/permission check whatsoever — any authenticated
+        // account (Student, Parent, ...) could file a TimetableChangeRequest attributed to
+        // themselves as TeacherId and fan out an admin notification. Gated to Teacher, same
+        // as MarkAttendance/Roster elsewhere in this controller.
+        var caller = await db.Users.FindAsync(userId);
+        if (caller is null || caller.AccountType != AccountType.Teacher)
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Description))
+        {
+            return BadRequest(new { error = "description_required", message = "Description must not be empty." });
+        }
+
         var changeRequest = new TimetableChangeRequest
         {
             Id = Guid.NewGuid(),
@@ -278,17 +310,15 @@ public class TimetableController(AppDbContext db, IPermissionService permissions
         // approves/rejects it"; routing this means Admin finds out a request exists without
         // polling. Fanned out to every Admin in the requesting teacher's own college, same
         // scoping rule as TWA-11's report routing (see AdminRecipients).
-        var teacher = await db.Users.FindAsync(userId);
-        if (teacher is not null)
         {
-            var adminIds = await AdminRecipients.GetCollegeAdminIdsAsync(db, teacher.CollegeId);
+            var adminIds = await AdminRecipients.GetCollegeAdminIdsAsync(db, caller.CollegeId);
             foreach (var adminId in adminIds)
             {
                 await notifications.RouteAsync(adminId, NotificationType.TimetableRequest, new
                 {
                     changeRequestId = changeRequest.Id,
                     teacherId = userId,
-                    teacherName = teacher.FullName,
+                    teacherName = caller.FullName,
                     description = changeRequest.Description,
                     requestedAt = changeRequest.RequestedAt,
                 });

@@ -750,6 +750,90 @@ public class TimetableControllerTests
         Assert.Equal(3, dto.DayOfWeek);
     }
 
+    // #23: request.TeacherId was previously applied with zero validation — no check that
+    // the target user exists, is AccountType.Teacher, or belongs to the slot's own college.
+    // A student reassigned onto a slot passes every downstream "am I the slot's teacher"
+    // gate (Roster, MarkAttendance).
+    [Fact]
+    public async Task Issue23_PatchSlot_RejectsReassigningToANonTeacherAccount()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), Name = "CS", CollegeId = caller.CollegeId };
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var student = NewUser(AccountType.Student);
+        student.CollegeId = caller.CollegeId;
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = slotTeacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        db.Users.AddRange(caller, slotTeacher, student);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.TimetableSlots.Add(slot);
+        await db.SaveChangesAsync();
+
+        var controller = GlobalCallerController(db, caller);
+        var result = await controller.PatchSlot(slot.Id, new PatchSlotRequest(student.Id, null, null, null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        var unchanged = await db.TimetableSlots.FindAsync(slot.Id);
+        Assert.Equal(slotTeacher.Id, unchanged!.TeacherId);
+    }
+
+    // #23: same rule for a teacher who exists but belongs to a different college than the slot.
+    [Fact]
+    public async Task Issue23_PatchSlot_RejectsReassigningToATeacherFromAnotherCollege()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), Name = "CS", CollegeId = caller.CollegeId };
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var otherCollegeTeacher = NewUser(AccountType.Teacher); // random (different) college
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = slotTeacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        db.Users.AddRange(caller, slotTeacher, otherCollegeTeacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.TimetableSlots.Add(slot);
+        await db.SaveChangesAsync();
+
+        var controller = GlobalCallerController(db, caller);
+        var result = await controller.PatchSlot(slot.Id, new PatchSlotRequest(otherCollegeTeacher.Id, null, null, null, null));
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+    }
+
+    // #23: a valid same-college Teacher reassignment still succeeds.
+    [Fact]
+    public async Task Issue23_PatchSlot_AllowsReassigningToASameCollegeTeacher()
+    {
+        await using var db = NewDb();
+        var caller = NewUser(AccountType.AdminTier);
+        var department = new Department { Id = Guid.NewGuid(), Name = "CS", CollegeId = caller.CollegeId };
+        var section = NewSection(department.Id);
+        var subject = new Subject { Id = Guid.NewGuid(), DepartmentId = department.Id, Code = "CS101", Name = "Intro" };
+        var slotTeacher = NewUser(AccountType.Teacher);
+        var newTeacher = NewUser(AccountType.Teacher);
+        newTeacher.CollegeId = caller.CollegeId;
+        var slot = new TimetableSlot { Id = Guid.NewGuid(), SectionId = section.Id, SubjectId = subject.Id, TeacherId = slotTeacher.Id, DayOfWeek = 1, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(10, 0) };
+        db.Users.AddRange(caller, slotTeacher, newTeacher);
+        db.Departments.Add(department);
+        db.Sections.Add(section);
+        db.Subjects.Add(subject);
+        db.TimetableSlots.Add(slot);
+        await db.SaveChangesAsync();
+
+        var controller = GlobalCallerController(db, caller);
+        var result = await controller.PatchSlot(slot.Id, new PatchSlotRequest(newTeacher.Id, null, null, null, null));
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<TimetableSlotDto>(ok.Value);
+        Assert.Equal(newTeacher.Id, dto.TeacherId);
+    }
+
     // TWA-13 + Notification Router (shared, #80) — requesting a timetable change routes a
     // TimetableRequest notification to every Admin in the requesting teacher's own college.
     private class RecordingNotificationRouter : INotificationRouter
@@ -801,5 +885,29 @@ public class TimetableControllerTests
         var routed = Assert.Single(router.Routed);
         Assert.Equal(admin.Id, routed.RecipientId);
         Assert.Equal(NotificationType.TimetableRequest, routed.Type);
+    }
+
+    // #27: this endpoint previously had no role/permission check whatsoever — any
+    // authenticated account (Student, Parent, ...) could file a request attributed to
+    // themselves as TeacherId and fan out an admin notification.
+    [Theory]
+    [InlineData(AccountType.Student)]
+    [InlineData(AccountType.Parent)]
+    [InlineData(AccountType.AdminTier)]
+    public async Task Issue27_CreateChangeRequest_ForbidsNonTeacherCallers(AccountType accountType)
+    {
+        await using var db = NewDb();
+        var caller = NewUser(accountType);
+        db.Users.Add(caller);
+        await db.SaveChangesAsync();
+
+        var router = new RecordingNotificationRouter();
+        var controller = ControllerAs(db, caller, router);
+
+        var result = await controller.CreateChangeRequest(new CreateChangeRequestRequest("Move CS101 to a bigger room"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.TimetableChangeRequests.ToListAsync());
+        Assert.Empty(router.Routed);
     }
 }

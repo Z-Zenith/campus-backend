@@ -50,7 +50,7 @@ public class ReportsControllerTests
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())], "TestAuth"));
-        return new ReportsController(db, router)
+        return new ReportsController(db, router, new CollegeScopeService(db))
         {
             ControllerContext = new ControllerContext
             {
@@ -140,5 +140,84 @@ public class ReportsControllerTests
 
         Assert.IsType<ForbidResult>(result.Result);
         Assert.Empty(router.Routed);
+    }
+
+    // #24: StudentId was never checked against the caller's own college — a lecturer at
+    // College A could file a permanent disciplinary report against a College B student.
+    [Fact]
+    public async Task Issue24_Create_ForbidsCrossCollegeStudentTarget()
+    {
+        await using var db = NewDb();
+        await SeedAdminRoleAsync(db);
+        var collegeId = Guid.NewGuid();
+        var teacher = NewUser(collegeId, AccountType.Teacher);
+        var otherCollegeStudent = NewUser(Guid.NewGuid(), AccountType.Student);
+        db.Users.AddRange(teacher, otherCollegeStudent);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = teacher.Id, RoleCode = "lecturer", GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var router = new RecordingNotificationRouter();
+        var controller = ControllerAs(db, teacher, router);
+
+        var result = await controller.Create(new CreateReportRequest(null, otherCollegeStudent.Id, "Cross-college report"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.TeacherReports.ToListAsync());
+        Assert.Empty(router.Routed);
+    }
+
+    // #24: same scoping rule for SectionId.
+    [Fact]
+    public async Task Issue24_Create_ForbidsCrossCollegeSectionTarget()
+    {
+        await using var db = NewDb();
+        await SeedAdminRoleAsync(db);
+        var collegeId = Guid.NewGuid();
+        var teacher = NewUser(collegeId, AccountType.Teacher);
+        var otherDepartment = new Department { Id = Guid.NewGuid(), CollegeId = Guid.NewGuid(), Name = "CS" };
+        var otherSection = new Section { Id = Guid.NewGuid(), DepartmentId = otherDepartment.Id, Year = 1, Name = "A" };
+        db.Users.Add(teacher);
+        db.Departments.Add(otherDepartment);
+        db.Sections.Add(otherSection);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = teacher.Id, RoleCode = "lecturer", GrantedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var router = new RecordingNotificationRouter();
+        var controller = ControllerAs(db, teacher, router);
+
+        var result = await controller.Create(new CreateReportRequest(otherSection.Id, null, "Cross-college report"));
+
+        Assert.IsType<ForbidResult>(result.Result);
+        Assert.Empty(await db.TeacherReports.ToListAsync());
+    }
+
+    // #13: List() previously had no Where clause at all — any "admin" role holder, at any
+    // college, could read every teacher report platform-wide.
+    [Fact]
+    public async Task Issue13_List_OnlyReturnsReportsFromTheAdminsOwnCollege()
+    {
+        await using var db = NewDb();
+        await SeedAdminRoleAsync(db);
+        var collegeId = Guid.NewGuid();
+        var otherCollegeId = Guid.NewGuid();
+        var localAdmin = NewUser(collegeId, AccountType.AdminTier);
+        var localTeacher = NewUser(collegeId, AccountType.Teacher);
+        var localStudent = NewUser(collegeId, AccountType.Student);
+        var otherTeacher = NewUser(otherCollegeId, AccountType.Teacher);
+        var otherStudent = NewUser(otherCollegeId, AccountType.Student);
+        db.Users.AddRange(localAdmin, localTeacher, localStudent, otherTeacher, otherStudent);
+        db.RoleBindings.Add(new RoleBinding { Id = Guid.NewGuid(), UserId = localAdmin.Id, RoleCode = "admin", GrantedAt = DateTime.UtcNow });
+        db.TeacherReports.AddRange(
+            new TeacherReport { Id = Guid.NewGuid(), TeacherId = localTeacher.Id, StudentId = localStudent.Id, Content = "Local report", SubmittedAt = DateTime.UtcNow },
+            new TeacherReport { Id = Guid.NewGuid(), TeacherId = otherTeacher.Id, StudentId = otherStudent.Id, Content = "Other college report", SubmittedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var controller = ControllerAs(db, localAdmin, new RecordingNotificationRouter());
+        var result = await controller.List();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var reports = Assert.IsType<List<TeacherReportDto>>(ok.Value);
+        var report = Assert.Single(reports);
+        Assert.Equal("Local report", report.Content);
     }
 }

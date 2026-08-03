@@ -17,7 +17,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/reports")]
 [Authorize]
-public class ReportsController(AppDbContext db, INotificationRouter notifications) : ControllerBase
+public class ReportsController(AppDbContext db, INotificationRouter notifications, ICollegeScopeService collegeScope) : ControllerBase
 {
     private static readonly string[] TeacherRoleCodes = ["lecturer", "hod"];
 
@@ -38,6 +38,42 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
         if (request.SectionId is null && request.StudentId is null)
         {
             return BadRequest(new { error = "sectionId or studentId is required" });
+        }
+
+        // #24: neither StudentId nor SectionId was ever checked against the caller's own
+        // college — a lecturer at College A could file a permanent disciplinary report
+        // against a College B student/section, which then surfaces in that student's own
+        // profile (UsersController.GetProfile).
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
+        if (request.StudentId is { } studentId)
+        {
+            var studentCollegeId = await db.Users
+                .Where(u => u.Id == studentId)
+                .Select(u => (Guid?)u.CollegeId)
+                .FirstOrDefaultAsync();
+            if (studentCollegeId is null)
+            {
+                return BadRequest(new { error = "unknown_student", message = "No student exists with that id." });
+            }
+            if (studentCollegeId != callerCollegeId)
+            {
+                return Forbid();
+            }
+        }
+        if (request.SectionId is { } sectionId)
+        {
+            var sectionCollegeId = await db.Sections
+                .Where(s => s.Id == sectionId)
+                .Select(s => (Guid?)s.Department.CollegeId)
+                .FirstOrDefaultAsync();
+            if (sectionCollegeId is null)
+            {
+                return BadRequest(new { error = "unknown_section", message = "No section exists with that id." });
+            }
+            if (sectionCollegeId != callerCollegeId)
+            {
+                return Forbid();
+            }
         }
 
         var report = new TeacherReport
@@ -92,10 +128,16 @@ public class ReportsController(AppDbContext db, INotificationRouter notification
             return Forbid();
         }
 
+        // #13: no Where clause at all previously — any "admin" role holder, at any college,
+        // could read every teacher report platform-wide. Scoped to the reporting teacher's
+        // own college, matching the scoping already applied to this same report's
+        // notification fan-out in Create() above (AdminRecipients.GetCollegeAdminIdsAsync).
+        var callerCollegeId = await collegeScope.GetCollegeIdAsync(userId);
         var reports = await db.TeacherReports
             .Include(r => r.Teacher)
             .Include(r => r.Section)
             .Include(r => r.Student)
+            .Where(r => r.Teacher.CollegeId == callerCollegeId)
             .OrderByDescending(r => r.SubmittedAt)
             .ToListAsync();
         return Ok(reports.Select(ToDto).ToList());

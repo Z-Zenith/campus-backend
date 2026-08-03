@@ -13,6 +13,9 @@ public class FakeAiServicesClient : IAiServicesClient
     public string BrowsingSummaryText { get; set; } = "";
     public SyllabusExtractionResult SyllabusExtractionResult { get; set; } = new(null, null, null, null, []);
     public bool ThrowInvalidPdf { get; set; }
+    // #30: simulates the AI-service-unreachable case (connection refused/timeout) so tests
+    // can exercise SyllabusController.Extract's graceful-degradation catch clause.
+    public bool ThrowServiceUnavailable { get; set; }
     public byte[]? LastPdfBytes { get; private set; }
     public ClassifyDomainResult ClassifyDomainResult { get; set; } = new(0.5, new Dictionary<string, double>());
     public string? LastClassifiedDomain { get; private set; }
@@ -37,6 +40,10 @@ public class FakeAiServicesClient : IAiServicesClient
         if (ThrowInvalidPdf)
         {
             throw new SyllabusExtractionInvalidPdfException();
+        }
+        if (ThrowServiceUnavailable)
+        {
+            throw new HttpRequestException("Simulated AI Services outage.");
         }
         LastPdfBytes = pdfBytes;
         return Task.FromResult(SyllabusExtractionResult);

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using BackendApi.Contracts;
 using BackendApi.Data;
 using BackendApi.Data.Entities;
@@ -23,7 +24,7 @@ namespace BackendApi.Controllers;
 [ApiController]
 [Route("api/v1/syllabus")]
 [Authorize]
-public class SyllabusController(AppDbContext db, IAiServicesClient aiServices) : ControllerBase
+public class SyllabusController(AppDbContext db, IAiServicesClient aiServices, ILogger<SyllabusController> logger) : ControllerBase
 {
     [HttpPost("extract")]
     public async Task<ActionResult<SyllabusExtractionResponseDto>> Extract(IFormFile file, CancellationToken ct)
@@ -59,6 +60,19 @@ public class SyllabusController(AppDbContext db, IAiServicesClient aiServices) :
         catch (SyllabusExtractionInvalidPdfException)
         {
             return BadRequest(new { error = "invalid_pdf", message = "The uploaded file could not be read as a PDF." });
+        }
+        // #30: AI-service down/connection-refused, a hung response past the client's
+        // timeout, or a malformed JSON reply previously bubbled up as a raw, unstructured
+        // 500 — matching TelemetryController's own established pattern for AI-service calls
+        // (catches exactly these three exception types and degrades gracefully) instead.
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            logger.LogWarning(ex, "Could not reach AI Services for syllabus extraction.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                error = "ai_service_unavailable",
+                message = "Syllabus extraction is temporarily unavailable. Please try again shortly.",
+            });
         }
     }
 
